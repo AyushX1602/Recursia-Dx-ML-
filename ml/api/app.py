@@ -32,6 +32,9 @@ from models.tumor_predictor import TumorPredictor
 from utils.image_utils import validate_image_format, get_image_info, enhance_medical_image
 from utils.data_manager import DataManager, save_prediction_report, validate_prediction_data
 from config.config import get_config, ERROR_MESSAGES
+from pipeline import HistopathologyPipeline
+from classifier import PatchClassifier
+from aggregation import HeatmapGenerator
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -58,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize components
 predictor = None
+pipeline = None
 data_manager = DataManager(str(config.DATABASE_PATH))
 
 def convert_numpy_types(obj):
@@ -77,7 +81,7 @@ def convert_numpy_types(obj):
 
 def initialize_model():
     """Initialize the tumor prediction model."""
-    global predictor
+    global predictor, pipeline
     try:
         # ===================================================
         # 🔒 PYTORCH DETERMINISTIC SETUP
@@ -98,14 +102,31 @@ def initialize_model():
         
         predictor = TumorPredictor()
         
-        # Check if pre-trained model exists
-        if os.path.exists(config.PRETRAINED_MODEL_PATH):
-            predictor.load_model(str(config.PRETRAINED_MODEL_PATH))
-            logger.info("Pre-trained model loaded successfully")
+        # Check for model file
+        model_path = os.path.join(os.path.dirname(__file__), '..', 'models', '__pycache__', 'best_resnet50_model.pth')
+        
+        if os.path.exists(model_path):
+            logger.info(f"✅ Found trained model at: {model_path}")
+            predictor.load_model(model_path)
+            logger.info("✅ Pre-trained model loaded successfully")
+            
+            # Initialize the pipeline for heatmap generation
+            try:
+                pipeline = HistopathologyPipeline(
+                    model_path=model_path,
+                    patch_size=224,
+                    overlap=0.25,
+                    detection_threshold=0.5,
+                    verbose=False
+                )
+                logger.info("✅ Histopathology pipeline initialized")
+            except Exception as pipeline_error:
+                logger.warning(f"⚠️ Pipeline initialization failed: {pipeline_error}")
+                pipeline = None
         else:
-            # Build and use the base model (requires training)
-            predictor.build_model()
-            logger.warning("Using untrained model. Please train the model before production use.")
+            logger.error(f"❌ Model file not found at: {model_path}")
+            logger.error("❌ Cannot proceed without trained model")
+            return False
         
         # Ensure model is in evaluation mode
         try:
@@ -144,10 +165,11 @@ def handle_internal_error(e):
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
-    global predictor
+    global predictor, pipeline
     return jsonify({
-        'status': 'healthy',
+        'status': 'healthy' if predictor is not None else 'unavailable',
         'model_loaded': predictor is not None,
+        'pipeline_loaded': pipeline is not None,
         'timestamp': time.time()
     })
 
@@ -481,7 +503,7 @@ def get_stats():
 @app.route('/model_info', methods=['GET'])
 def get_model_info():
     """Get model information."""
-    global predictor
+    global predictor, pipeline
     
     try:
         if predictor is None:
@@ -497,7 +519,8 @@ def get_model_info():
             'classes': config.MODEL_CLASSES,
             'num_classes': config.NUM_CLASSES,
             'version': 'v1.0',
-            'description': 'Pre-trained ResNet50 model fine-tuned for tumor detection'
+            'description': 'Pre-trained ResNet50 model fine-tuned for tumor detection',
+            'pipeline_available': pipeline is not None
         }
         
         return jsonify(info)
@@ -509,15 +532,173 @@ def get_model_info():
             'error': 'Failed to retrieve model information'
         }), 500
 
+@app.route('/generate_heatmap', methods=['POST'])
+def generate_heatmap():
+    """Generate real heatmap from image using the pipeline."""
+    global pipeline, predictor
+    
+    try:
+        # Check if pipeline is loaded
+        if pipeline is None or predictor is None:
+            return jsonify({
+                'success': False,
+                'error': 'ML model or pipeline not available'
+            }), 503
+        
+        # Check if image file is present
+        if 'image' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No image file provided'
+            }), 400
+        
+        file = request.files['image']
+        
+        if file.filename == '':
+            return jsonify({
+                'success': False,
+                'error': 'No file selected'
+            }), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({
+                'success': False,
+                'error': ERROR_MESSAGES['invalid_image_format']
+            }), 400
+        
+        # Save uploaded file
+        filename = secure_filename(file.filename)
+        timestamp = str(int(time.time()))
+        filename = f"{timestamp}_{filename}"
+        filepath = os.path.join(config.UPLOADS_DIR, filename)
+        file.save(filepath)
+        
+        logger.info(f"Generating heatmap for: {filename}")
+        start_time = time.time()
+        
+        try:
+            # Load image to get basic prediction
+            image = Image.open(filepath)
+            image_array = np.array(image.convert('RGB'))
+            
+            # Get basic prediction
+            prediction_result = predictor.predict(image_array)
+            
+            # Generate real heatmap using simplified approach
+            # For larger images, we'll use patch-based analysis
+            img_width, img_height = image.size
+            
+            # Initialize heatmap generator
+            heatmap_gen = HeatmapGenerator(
+                image_size=(img_width, img_height),
+                patch_size=224,
+                aggregation_method='weighted_average',
+                smoothing_sigma=3.0
+            )
+            
+            # Process in patches for detailed heatmap
+            patch_size = 224
+            stride = int(patch_size * 0.75)  # 25% overlap
+            
+            for y in range(0, img_height - patch_size + 1, stride):
+                for x in range(0, img_width - patch_size + 1, stride):
+                    # Extract patch
+                    patch = image_array[y:y+patch_size, x:x+patch_size]
+                    
+                    # Predict on patch
+                    patch_pred = predictor.predict(patch)
+                    
+                    # Add to heatmap
+                    heatmap_gen.add_patch_prediction(
+                        x, y,
+                        patch_pred['probabilities']['tumor'],
+                        patch_pred['confidence'] * 100
+                    )
+            
+            # Generate heatmap
+            heatmap = heatmap_gen.generate_heatmap(apply_smoothing=True)
+            
+            # Apply colormap and create overlay
+            colored_heatmap = heatmap_gen.apply_colormap(heatmap)
+            
+            # Convert to base64
+            heatmap_pil = Image.fromarray(colored_heatmap)
+            buffer = BytesIO()
+            heatmap_pil.save(buffer, format='PNG')
+            heatmap_base64 = base64.b64encode(buffer.getvalue()).decode()
+            
+            processing_time = time.time() - start_time
+            
+            # Prepare response
+            response_data = {
+                'success': True,
+                'prediction': prediction_result,
+                'heatmap': {
+                    'base64': f'data:image/png;base64,{heatmap_base64}',
+                    'type': 'tumor_probability',
+                    'colormap': 'jet',
+                    'analytics': {
+                        'min_value': float(heatmap.min()),
+                        'max_value': float(heatmap.max()),
+                        'mean_value': float(heatmap.mean()),
+                        'std_value': float(heatmap.std())
+                    }
+                },
+                'processing_time': round(processing_time, 3),
+                'timestamp': time.time()
+            }
+            
+            logger.info(f"Heatmap generated in {processing_time:.3f}s")
+            
+            # Convert NumPy types
+            response_data = convert_numpy_types(response_data)
+            
+            return jsonify(response_data)
+            
+        except Exception as e:
+            logger.error(f"Heatmap generation failed: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': 'Heatmap generation failed',
+                'details': str(e) if app.debug else None
+            }), 500
+            
+        finally:
+            # Clean up uploaded file
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup file {filepath}: {str(e)}")
+    
+    except Exception as e:
+        logger.error(f"Request processing failed: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': ERROR_MESSAGES['unknown_error'],
+            'details': str(e) if app.debug else None
+        }), 500
+
 if __name__ == '__main__':
+    logger.info("Starting RecursiaDx ML API Server")
+    logger.info("=" * 70)
+    
     # Initialize model
     if initialize_model():
-        logger.info("Starting ML API server...")
+        logger.info("✅ Server initialization successful")
+        logger.info("=" * 70)
+        
+        # Run Flask app
+        port = int(os.getenv('ML_API_PORT', 5000))
+        logger.info(f"🚀 Starting server on port {port}...")
         app.run(
-            host=config.API_HOST,
-            port=config.API_PORT,
-            debug=config.API_DEBUG
+            host='0.0.0.0',
+            port=port,
+            debug=False,
+            threaded=True
         )
     else:
-        logger.error("Failed to initialize model. Exiting.")
-        exit(1)
+        logger.error("❌ Server initialization failed - Model not available")
+        logger.error("Please ensure trained model file exists:")
+        logger.error("  ml/models/__pycache__/best_resnet50_model.pth")
+        sys.exit(1)

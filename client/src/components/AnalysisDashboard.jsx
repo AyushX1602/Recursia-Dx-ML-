@@ -66,7 +66,13 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     }
 
     // Aggregate ML results from all images
-    const tumorDetections = mlAnalyses.filter(analysis => analysis.prediction === 'malignant')
+    // Check for tumor detection - model returns 'Tumor' or uses is_tumor flag
+    const tumorDetections = mlAnalyses.filter(analysis => 
+      analysis.prediction === 'Tumor' || 
+      analysis.prediction === 'malignant' ||
+      analysis.is_tumor === true ||
+      (analysis.metadata?.prediction?.is_tumor === true)
+    )
     const avgConfidence = mlAnalyses.reduce((sum, analysis) => sum + (analysis.confidence || 0), 0) / mlAnalyses.length
     const riskLevels = mlAnalyses.map(analysis => analysis.riskAssessment || 'medium')
     const detectedFeatures = [...new Set(mlAnalyses.flatMap(analysis => analysis.metadata?.detected_features || []))]
@@ -76,11 +82,15 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     
     // Calculate average tumor probability from all analyses
     const avgTumorProbability = mlAnalyses.reduce((sum, analysis) => {
-      return sum + (analysis.metadata?.prediction?.probabilities?.tumor || 0)
+      // ML result is stored in metadata, probabilities are at top level
+      const tumorProb = analysis.metadata?.probabilities?.tumor || 0
+      return sum + tumorProb
     }, 0) / mlAnalyses.length
 
     // Get the highest tumor probability for critical assessment
-    const maxTumorProbability = Math.max(...mlAnalyses.map(analysis => analysis.metadata?.prediction?.probabilities?.tumor || 0))
+    const maxTumorProbability = Math.max(...mlAnalyses.map(analysis => 
+      analysis.metadata?.probabilities?.tumor || 0
+    ))
 
     return {
       totalImages,
@@ -116,58 +126,14 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     if (extracted) {
       setIsAnalyzing(true)
       console.log('🔬 Real sample data loaded:', extracted)
+    } else {
+      // No real data - don't show mock results
+      setIsAnalyzing(false)
+      setResults(null)
     }
   }, [sample])
 
-  // Dynamic data based on real sample or fallback to mock
-  const getBloodTestResults = () => {
-    if (!realTimeData) {
-      return [
-        { test: 'Hemoglobin', value: 13.8, unit: 'g/dL', range: '12.0-15.5', status: 'normal' },
-        { test: 'RBC Count', value: 4.2, unit: 'million/µL', range: '3.8-5.2', status: 'normal' },
-        { test: 'WBC Count', value: 8.9, unit: 'thousand/µL', range: '4.0-11.0', status: 'normal' },
-        { test: 'Platelet Count', value: 180, unit: 'thousand/µL', range: '150-450', status: 'normal' },
-        { test: 'Blood Sugar', value: 95, unit: 'mg/dL', range: '70-100', status: 'normal' }
-      ]
-    }
-
-    // Generate dynamic results based on real ML analysis
-    const baseValues = {
-      'Hemoglobin': { base: 13.8, unit: 'g/dL', range: '12.0-15.5' },
-      'RBC Count': { base: 4.2, unit: 'million/µL', range: '3.8-5.2' },
-      'WBC Count': { base: 8.9, unit: 'thousand/µL', range: '4.0-11.0' },
-      'Platelet Count': { base: 180, unit: 'thousand/µL', range: '150-450' },
-      'Abnormal Cells': { base: realTimeData.tumorCount, unit: 'detected', range: '0', custom: true }
-    }
-
-    return Object.entries(baseValues).map(([test, config]) => {
-      let value = config.base
-      let status = 'normal'
-
-      if (test === 'Abnormal Cells') {
-        value = realTimeData.tumorCount
-        status = value > 0 ? 'abnormal' : 'normal'
-      } else if (realTimeData.tumorDetected) {
-        // Slightly modify values if tumors detected
-        const modifier = 0.9 + (Math.random() * 0.2) // 90-110% of normal
-        value = parseFloat((config.base * modifier).toFixed(1))
-        
-        // Determine status based on modified value and ranges
-        const [min, max] = config.range.split('-').map(v => parseFloat(v))
-        if (value < min || value > max) {
-          status = 'abnormal'
-        }
-      }
-
-      return {
-        test,
-        value,
-        unit: config.unit,
-        range: config.range,
-        status
-      }
-    })
-  }
+  // Blood test results not available - ResNet50 model only detects tumors in tissue, not blood cells
 
   const getConfidenceData = () => {
     if (!realTimeData) {
@@ -200,44 +166,6 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
         category: 'Classification', 
         confidence: Math.min(95, baseConfidence + 3), 
         color: '#8b5cf6' 
-      }
-    ]
-  }
-
-  const getCellCountData = () => {
-    if (!realTimeData) {
-      return [
-        { type: 'Red Blood Cells', count: 4200000, percentage: 85.2 },
-        { type: 'White Blood Cells', count: 8900, percentage: 0.18 },
-        { type: 'Platelets', count: 180000, percentage: 3.65 },
-        { type: 'Other', count: 540000, percentage: 10.97 }
-      ]
-    }
-
-    // Dynamic cell count based on analysis
-    const totalCells = 5000000 // Base total
-    const abnormalCells = realTimeData.tumorCount * 1000 // Scale up for display
-    
-    return [
-      { 
-        type: 'Normal Cells', 
-        count: totalCells - abnormalCells, 
-        percentage: ((totalCells - abnormalCells) / totalCells * 100).toFixed(1)
-      },
-      { 
-        type: 'Abnormal Cells', 
-        count: abnormalCells, 
-        percentage: (abnormalCells / totalCells * 100).toFixed(1)
-      },
-      { 
-        type: 'Analyzed Regions', 
-        count: realTimeData.analyzedImages * 10000, 
-        percentage: ((realTimeData.analyzedImages * 10000) / totalCells * 100).toFixed(1)
-      },
-      { 
-        type: 'Detected Features', 
-        count: realTimeData.detectedFeatures.length * 5000, 
-        percentage: ((realTimeData.detectedFeatures.length * 5000) / totalCells * 100).toFixed(1)
       }
     ]
   }
@@ -277,9 +205,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
   ]
 
   // Get dynamic data
-  const bloodTestResults = getBloodTestResults()
   const confidenceData = getConfidenceData()
-  const cellCountData = getCellCountData()
   const heatmapIntensity = getHeatmapIntensity()
 
   useEffect(() => {
@@ -329,7 +255,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
           }
           
           // Update current stage based on progress
-          const currentProgress = prev + (realTimeData ? 3 : 2) // Faster if real data
+          const currentProgress = Math.min(100, prev + (realTimeData ? 3 : 2)) // Cap at 100%
           if (currentProgress < 15) setCurrentStage('preprocessing')
           else if (currentProgress < 40) setCurrentStage('tiling')
           else if (currentProgress < 70) setCurrentStage('feature_extraction')
@@ -378,6 +304,22 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
           </Badge>
         </div>
       </div>
+
+      {/* Show message when no real data available */}
+      {!realTimeData && !isAnalyzing && (
+        <Card className="border-2 border-yellow-200 bg-yellow-50">
+          <CardContent className="p-8 text-center">
+            <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
+            <h3 className="text-lg font-semibold mb-2">No Analysis Data Available</h3>
+            <p className="text-muted-foreground mb-4">
+              Please upload and analyze images in the WSI Viewer to see ML-powered results here.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              The AI dashboard will display real-time analysis once images are processed with the ML model.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Real-time Data Summary */}
         {realTimeData && !isAnalyzing && (
@@ -528,24 +470,27 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                 {/* Per-Image Tumor Probabilities */}
                 <div className="space-y-2">
                   <h4 className="font-semibold text-sm">Per-Image Tumor Probabilities</h4>
-                  {realTimeData.analyses.map((analysis, index) => (
+                  {realTimeData.analyses.map((analysis, index) => {
+                    const tumorProb = (analysis.metadata?.probabilities?.tumor || 0) * 100
+                    return (
                     <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                       <span className="text-sm font-medium">Image {index + 1}</span>
                       <div className="flex items-center gap-2">
                         <div className="w-20 bg-gray-200 rounded-full h-2">
                           <div 
                             className={`h-2 rounded-full ${
-                              (analysis.metadata?.prediction?.probabilities?.tumor || 0) * 100 > 50 ? 'bg-red-500' : 'bg-yellow-500'
+                              tumorProb > 50 ? 'bg-red-500' : 'bg-yellow-500'
                             }`}
-                            style={{ width: `${(analysis.metadata?.prediction?.probabilities?.tumor || 0) * 100}%` }}
+                            style={{ width: `${tumorProb}%` }}
                           />
                         </div>
                         <span className="text-sm font-bold">
-                          {((analysis.metadata?.prediction?.probabilities?.tumor || 0) * 100).toFixed(1)}%
+                          {tumorProb.toFixed(1)}%
                         </span>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             </CardContent>
@@ -624,10 +569,10 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-2xl font-bold">
-                      {results ? results.accuracy : isAnalyzing ? analysisProgress.toFixed(1) : '--'}%
+                      {results ? results.accuracy.toFixed(1) : isAnalyzing ? analysisProgress.toFixed(1) : realTimeData ? (realTimeData.averageConfidence * 100).toFixed(1) : '--'}%
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {isAnalyzing ? 'Progress' : 'Accuracy'}
+                      {isAnalyzing ? 'Progress' : 'Model Confidence'}
                     </p>
                   </div>
                   <Target className="h-8 w-8 text-muted-foreground" />
@@ -640,7 +585,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-2xl font-bold">
-                      {results ? results.processingTime : isAnalyzing ? 'Processing...' : '--'}
+                      {results ? results.processingTime : isAnalyzing ? 'Processing...' : realTimeData ? `${realTimeData.analyzedImages * 0.3}s` : '--'}
                     </p>
                     <p className="text-sm text-muted-foreground">Processing Time</p>
                   </div>
@@ -654,9 +599,9 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-2xl font-bold">
-                      {results ? results.anomaliesDetected : isAnalyzing ? '...' : '0'}
+                      {results ? results.anomaliesDetected : isAnalyzing ? '...' : realTimeData ? realTimeData.tumorCount : '0'}
                     </p>
-                    <p className="text-sm text-muted-foreground">Anomalies Detected</p>
+                    <p className="text-sm text-muted-foreground">Tumors Detected</p>
                   </div>
                   <AlertTriangle className="h-8 w-8 text-muted-foreground" />
                 </div>
@@ -667,8 +612,8 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-2xl font-bold">5</p>
-                    <p className="text-sm text-muted-foreground">Tests Analyzed</p>
+                    <p className="text-2xl font-bold">{realTimeData ? realTimeData.analyzedImages : '0'}</p>
+                    <p className="text-sm text-muted-foreground">Images Analyzed</p>
                   </div>
                   <BarChart3 className="h-8 w-8 text-muted-foreground" />
                 </div>
@@ -676,7 +621,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
             </Card>
           </div>
 
-          {!isAnalyzing && (
+          {!isAnalyzing && realTimeData && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
@@ -713,103 +658,35 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                   </ChartContainer>
                 </CardContent>
               </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Cell Distribution</CardTitle>
-                  <CardDescription>
-                    Breakdown of detected cell types
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {cellCountData.map((cell, index) => (
-                      <div key={cell.type} className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div 
-                            className="w-4 h-4 rounded-full"
-                            style={{ backgroundColor: confidenceData[index]?.color || '#gray' }}
-                          />
-                          <span className="text-sm font-medium">{cell.type}</span>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-medium">
-                            {cell.count.toLocaleString()}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {cell.percentage}%
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           )}
         </TabsContent>
 
         <TabsContent value="blood-analysis" className="space-y-6">
           <Card>
-            <CardHeader>
-              <CardTitle>Blood Test Results</CardTitle>
-              <CardDescription>
-                Automated analysis of blood sample parameters
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {isAnalyzing ? (
-                <div className="space-y-4">
-                  {[...Array(5)].map((_, i) => (
-                    <div key={i} className="flex items-center space-x-4">
-                      <Skeleton className="h-12 w-12 rounded" />
-                      <div className="space-y-2 flex-1">
-                        <Skeleton className="h-4 w-[200px]" />
-                        <Skeleton className="h-4 w-[100px]" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Test</TableHead>
-                      <TableHead>Result</TableHead>
-                      <TableHead>Reference Range</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {bloodTestResults.map((test) => (
-                      <TableRow key={test.test}>
-                        <TableCell className="font-medium">{test.test}</TableCell>
-                        <TableCell>
-                          {test.value} {test.unit}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {test.range}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={test.status === 'normal' ? 'default' : 'destructive'}>
-                            {test.status === 'normal' ? (
-                              <CheckCircle2 className="h-3 w-3 mr-1" />
-                            ) : (
-                              <AlertTriangle className="h-3 w-3 mr-1" />
-                            )}
-                            {test.status}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
+            <CardContent className="p-8 text-center">
+              <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
+              <h3 className="text-lg font-semibold mb-2">Blood Analysis Not Available</h3>
+              <p className="text-muted-foreground">
+                The current model (ResNet50) is trained for tumor detection in tissue samples only.
+                Blood cell analysis requires a different model (e.g., EfficientNet for blood cells).
+              </p>
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="tissue-analysis" className="space-y-6">
+          {!realTimeData ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
+                <h3 className="text-lg font-semibold mb-2">No Tissue Analysis Data</h3>
+                <p className="text-muted-foreground">
+                  Tissue biopsy analysis results will appear here after analyzing histopathology images.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
           <Card>
             <CardHeader>
               <CardTitle>Tissue Biopsy Analysis</CardTitle>
@@ -829,30 +706,44 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <Alert>
-                    <CheckCircle2 className="h-4 w-4" />
-                    <AlertTitle>Analysis Complete</AlertTitle>
-                    <AlertDescription>
-                      No malignant cells detected. Normal tissue architecture observed.
-                    </AlertDescription>
+                  <Alert className={realTimeData.tumorDetected ? 'border-red-200 bg-red-50' : ''}>
+                    {realTimeData.tumorDetected ? (
+                      <>
+                        <AlertTriangle className="h-4 w-4 text-red-600" />
+                        <AlertTitle className="text-red-600">Abnormality Detected</AlertTitle>
+                        <AlertDescription>
+                          {realTimeData.tumorCount} suspicious region(s) detected. Further review recommended.
+                        </AlertDescription>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <AlertTitle>Analysis Complete</AlertTitle>
+                        <AlertDescription>
+                          No malignant cells detected. Normal tissue architecture observed.
+                        </AlertDescription>
+                      </>
+                    )}
                   </Alert>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <Card>
                       <CardContent className="p-4 text-center">
-                        <div className="text-2xl font-bold text-green-600">Normal</div>
+                        <div className={`text-2xl font-bold ${realTimeData.tumorDetected ? 'text-red-600' : 'text-green-600'}`}>
+                          {realTimeData.tumorDetected ? 'Abnormal' : 'Normal'}
+                        </div>
                         <div className="text-sm text-muted-foreground">Overall Assessment</div>
                       </CardContent>
                     </Card>
                     <Card>
                       <CardContent className="p-4 text-center">
-                        <div className="text-2xl font-bold">50.3%</div>
+                        <div className="text-2xl font-bold">{(realTimeData.averageConfidence * 100).toFixed(1)}%</div>
                         <div className="text-sm text-muted-foreground">Confidence Score</div>
                       </CardContent>
                     </Card>
                     <Card>
                       <CardContent className="p-4 text-center">
-                        <div className="text-2xl font-bold">0</div>
+                        <div className="text-2xl font-bold">{realTimeData.tumorCount}</div>
                         <div className="text-sm text-muted-foreground">Suspicious Regions</div>
                       </CardContent>
                     </Card>
@@ -861,6 +752,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
               )}
             </CardContent>
           </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="heatmaps" className="space-y-6">

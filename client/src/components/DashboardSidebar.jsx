@@ -40,12 +40,6 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
       ]
     },
     {
-      id: 'ml-demo',
-      title: 'ML Demo',
-      icon: 'Cpu',
-      description: 'Test tumor detection with ResNet50 model'
-    },
-    {
       id: 'review',
       title: 'Results Review',
       icon: 'CheckCircle',

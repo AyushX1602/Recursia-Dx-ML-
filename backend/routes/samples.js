@@ -11,113 +11,72 @@ import fs from 'fs';
 
 const router = express.Router();
 
-// Auto-generate heatmap function
-async function generateAutoHeatmap(imagePath, imageId) {
-  return new Promise((resolve) => {
+// Generate real heatmap function using ML service
+async function generateRealHeatmap(imagePath, imageId) {
+  return new Promise(async (resolve) => {
     try {
-      const heatmapExamplesDir = path.join(process.cwd(), '..', 'ml', 'heatmap_examples');
-      const outputDir = path.join(process.cwd(), 'uploads', 'heatmaps');
-      
-      // Ensure output directory exists
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
+      const FormData = (await import('form-data')).default;
+      const formData = new FormData();
+      formData.append('image', fs.createReadStream(imagePath));
+
+      // Call ML service to generate real heatmap
+      const response = await fetch('http://localhost:5000/generate_heatmap', {
+        method: 'POST',
+        body: formData,
+        timeout: 30000
+      });
+
+      if (!response.ok) {
+        throw new Error(`ML heatmap service returned ${response.status}`);
       }
-      
-      // Available heatmap examples with their analytics
-      const availableHeatmaps = [
-        {
-          source: 'heatmap_hot.png',
-          type: 'tumor_probability',
-          colormap: 'hot',
-          analytics: {
-            min_value: 0.0,
-            max_value: 0.9073608271482184,
-            mean_value: 0.28915497976794247,
-            std_value: 0.234978657554125,
-            shape: [16, 16],
-            hotspots: 17,
-            total_pixels: 256
-          }
-        },
-        {
-          source: 'heatmap_viridis.png',
-          type: 'confidence',
-          colormap: 'viridis',
-          analytics: {
-            min_value: 0.3768195980284063,
-            max_value: 0.9339579326308897,
-            mean_value: 0.6236872365395125,
-            std_value: 0.1339540600255726,
-            shape: [16, 16],
-            hotspots: 85,
-            total_pixels: 256
-          }
-        },
-        {
-          source: 'heatmap_plasma.png',
-          type: 'risk_score',
-          colormap: 'plasma',
-          analytics: {
-            min_value: 0.2685816582514944,
-            max_value: 0.8378640996056985,
-            mean_value: 0.5513551464485202,
-            std_value: 0.1452114761049256,
-            shape: [16, 16],
-            hotspots: 42,
-            total_pixels: 256
-          }
-        }
-      ];
-      
-      // Select a random heatmap or rotate based on imageId
-      const heatmapIndex = Math.floor(Math.random() * availableHeatmaps.length);
-      const selectedHeatmap = availableHeatmaps[heatmapIndex];
-      
-      const timestamp = Date.now();
-      const outputFilename = `auto_heatmap_${imageId}_${timestamp}.png`;
-      const sourcePath = path.join(heatmapExamplesDir, selectedHeatmap.source);
-      const outputPath = path.join(outputDir, outputFilename);
-      
-      console.log(`🎨 Extracting heatmap from examples: ${selectedHeatmap.source} -> ${outputFilename}`);
-      
-      // Copy the example heatmap to the output location
-      if (fs.existsSync(sourcePath)) {
-        fs.copyFileSync(sourcePath, outputPath);
+
+      const result = await response.json();
+
+      if (result.success && result.heatmap) {
+        const outputDir = path.join(process.cwd(), 'uploads', 'heatmaps');
         
-        console.log(`✅ Heatmap extracted from examples: ${outputFilename}`);
-        
-        // Read heatmap file and convert to base64 for inline display
-        let heatmapBase64 = null;
-        try {
-          const imageBuffer = fs.readFileSync(outputPath);
-          heatmapBase64 = `data:image/png;base64,${imageBuffer.toString('base64')}`;
-          console.log(`📊 Base64 encoded heatmap for inline display`);
-        } catch (base64Error) {
-          console.error('⚠️ Failed to encode heatmap as base64:', base64Error.message);
+        // Ensure output directory exists
+        if (!fs.existsSync(outputDir)) {
+          fs.mkdirSync(outputDir, { recursive: true });
         }
 
-        resolve({
-          success: true,
-          heatmap: {
-            filename: outputFilename,
-            path: `/api/samples/heatmap/${outputFilename}`,
-            base64: heatmapBase64,
-            type: selectedHeatmap.type,
-            colormap: selectedHeatmap.colormap,
-            analytics: selectedHeatmap.analytics
-          }
-        });
+        const timestamp = Date.now();
+        const outputFilename = `real_heatmap_${imageId}_${timestamp}.png`;
+        const outputPath = path.join(outputDir, outputFilename);
+
+        // Save base64 heatmap to file
+        if (result.heatmap.base64) {
+          const base64Data = result.heatmap.base64.replace(/^data:image\/png;base64,/, '');
+          fs.writeFileSync(outputPath, base64Data, 'base64');
+          
+          console.log(`✅ Real heatmap generated: ${outputFilename}`);
+          
+          resolve({
+            success: true,
+            heatmap: {
+              filename: outputFilename,
+              path: `/api/samples/heatmap/${outputFilename}`,
+              base64: result.heatmap.base64,
+              type: result.heatmap.type || 'tumor_probability',
+              colormap: result.heatmap.colormap || 'jet',
+              analytics: result.heatmap.analytics || {}
+            }
+          });
+        } else {
+          throw new Error('No heatmap data received from ML service');
+        }
       } else {
-        console.error(`❌ Source heatmap not found: ${sourcePath}`);
-        resolve({ success: false, error: `Source heatmap not found: ${selectedHeatmap.source}` });
+        throw new Error(result.error || 'Heatmap generation failed');
       }
       
     } catch (error) {
-      console.error(`❌ Auto-heatmap extraction error for image ${imageId}:`, error.message);
+      console.error(`❌ Real heatmap generation error for image ${imageId}:`, error.message);
       resolve({ success: false, error: error.message });
     }
   });
 }
+
+// REMOVED: Old random generateAutoHeatmap function - now using real ML heatmaps only
 
 // Simple test route without any middleware
 router.post('/test-upload', (req, res) => {
@@ -360,7 +319,40 @@ router.post('/upload-with-analysis',
   catchAsync(async (req, res) => {
     console.log('🚀 UPLOAD ROUTE REACHED - Auth Disabled!');
     try {
-      const sampleData = JSON.parse(req.body.sampleData);
+      // Parse sample data or patient info
+      let sampleData
+      if (req.body.sampleData) {
+        sampleData = JSON.parse(req.body.sampleData)
+      } else if (req.body.patientInfo) {
+        // If only patientInfo is sent, create minimal sample data
+        const patientInfo = JSON.parse(req.body.patientInfo)
+        sampleData = {
+          patientInfo,
+          sampleType: 'Tissue',
+          collectionDate: new Date().toISOString()
+        }
+      } else {
+        // No data provided, use defaults
+        sampleData = {
+          patientInfo: {
+            name: 'Unknown Patient',
+            age: 0,
+            gender: 'Unknown'
+          },
+          sampleType: 'Tissue',
+          collectionDate: new Date().toISOString()
+        }
+      }
+      
+      // CRITICAL: Check if ML service is available
+      const mlHealthCheck = await MLService.checkHealth();
+      if (!mlHealthCheck.healthy) {
+        return res.status(503).json({
+          success: false,
+          message: 'ML service is not available. Please start the ML server on port 5000.',
+          error: 'ML_SERVICE_UNAVAILABLE'
+        });
+      }
       
       // Generate unique sample ID
       const sampleCount = await Sample.countDocuments();
@@ -378,8 +370,18 @@ router.post('/upload-with-analysis',
           filename: file.filename
         }));
         
-        // Run batch ML analysis
+        // Run batch ML analysis - REAL ANALYSIS ONLY
+        console.log('🧠 Running real ML analysis...');
         const mlResults = await MLService.batchPredict(imagePathsForML);
+        
+        if (!mlResults.success) {
+          // If ML fails, don't provide mock data - fail the request
+          return res.status(503).json({
+            success: false,
+            message: 'ML analysis failed. Cannot proceed without real analysis.',
+            error: mlResults.error
+          });
+        }
         
         // Process each image with its ML result
         for (let i = 0; i < req.files.length; i++) {
@@ -432,15 +434,16 @@ router.post('/upload-with-analysis',
             };
           }
           
-          // Auto-generate heatmap for each image
-          console.log(`🎨 Auto-generating heatmap for image ${i + 1}/${req.files.length}`);
-          const heatmapResult = await generateAutoHeatmap(file.path, file.filename);
+          // Generate REAL heatmap using ML service - NO RANDOM MOCK DATA
+          console.log(`🎨 Generating real heatmap for image ${i + 1}/${req.files.length}`);
+          const heatmapResult = await generateRealHeatmap(file.path, file.filename);
           
           if (heatmapResult.success) {
             imageData.heatmap = heatmapResult.heatmap;
-            console.log(`✅ Heatmap auto-generated for ${file.filename}`);
+            console.log(`✅ Real heatmap generated for ${file.filename}`);
           } else {
-            console.log(`❌ Heatmap auto-generation failed for ${file.filename}:`, heatmapResult.error);
+            console.log(`⚠️ Heatmap generation skipped for ${file.filename}: ${heatmapResult.error}`);
+            // Don't add mock heatmap - leave it undefined
           }
           
           processedImages.push(imageData);

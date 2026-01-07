@@ -19,17 +19,26 @@ import {
   Eye,
   Grid3X3,
   Layers,
-  Target
+  Target,
+  Upload,
+  Plus,
+  X
 } from 'lucide-react'
 
-export function WSIViewer({ onNext, sample }) {
+export function WSIViewer({ onNext, sample, onSampleUpdated }) {
   const [selectedImage, setSelectedImage] = useState(null)
   const [zoomLevel, setZoomLevel] = useState(1)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const [isLoading, setIsLoading] = useState(false)
   const [showGrid, setShowGrid] = useState(false)
   const [annotations, setAnnotations] = useState([])
+  const [uploadedImages, setUploadedImages] = useState([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [activeTool, setActiveTool] = useState('pan') // 'pan' or 'annotate'
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const canvasRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   // Debug: Log sample data
   console.log('🔍 WSIViewer received sample:', sample)
@@ -54,6 +63,80 @@ export function WSIViewer({ onNext, sample }) {
     console.log('❌ WSI Viewer: No sample data received')
   }
 
+  // Handle file upload
+  const handleFileUpload = async (event) => {
+    const files = Array.from(event.target.files)
+    if (files.length === 0) return
+
+    setIsUploading(true)
+    
+    try {
+      const newImages = []
+      
+      for (const file of files) {
+        // Validate file type
+        const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/tiff', 'image/bmp']
+        if (!validTypes.includes(file.type)) {
+          toast.error(`${file.name}: Invalid file type. Please upload images only.`)
+          continue
+        }
+
+        // Validate file size (max 50MB)
+        if (file.size > 50 * 1024 * 1024) {
+          toast.error(`${file.name}: File size exceeds 50MB limit.`)
+          continue
+        }
+
+        // Create a preview URL
+        const previewUrl = URL.createObjectURL(file)
+        
+        const newImage = {
+          id: `upload-${Date.now()}-${Math.random()}`,
+          name: file.name,
+          type: 'uploaded',
+          resolution: 'N/A',
+          size: `${file.size} bytes`,
+          staining: 'Unknown',
+          thumbnail: previewUrl,
+          fullImage: previewUrl,
+          analysis: 'pending',
+          file: file,
+          uploadedAt: new Date().toISOString()
+        }
+        
+        newImages.push(newImage)
+      }
+
+      setUploadedImages(prev => [...prev, ...newImages])
+      toast.success(`Successfully added ${newImages.length} image(s)`)
+      
+      // Automatically select the first uploaded image
+      if (newImages.length > 0 && !selectedImage) {
+        handleImageSelect(newImages[0])
+      }
+      
+    } catch (error) {
+      console.error('Upload error:', error)
+      toast.error('Failed to add images')
+  // Combine sample images with uploaded images
+  const allImages = [...wsiImages, ...uploadedImages]
+
+    } finally {
+      setIsUploading(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
+  const handleRemoveImage = (imageId) => {
+    setUploadedImages(prev => prev.filter(img => img.id !== imageId))
+    if (selectedImage?.id === imageId) {
+      setSelectedImage(null)
+    }
+    toast.info('Image removed')
+  }
+
   // Use real sample images or mock data
   const wsiImages = sample?.images?.length > 0 ? sample.images.map(img => {
     console.log('🔍 Processing image:', img)
@@ -72,46 +155,17 @@ export function WSIViewer({ onNext, sample }) {
     }
     console.log('🔍 Mapped image data:', imageData)
     return imageData
-  }) : [
-    // Mock data fallback
-    {
-      id: 1,
-      name: 'Blood_Smear_001.jpg',
-      type: 'blood',
-      resolution: '40x',
-      size: '2048x1536',
-      staining: 'Wright-Giemsa',
-      thumbnail: '/api/placeholder/300/200',
-      fullImage: '/api/placeholder/1200/800',
-      analysis: 'pending'
-    },
-    {
-      id: 2,
-      name: 'Tissue_Biopsy_H&E_001.svs',
-      type: 'tissue',
-      resolution: '20x',
-      size: '4096x3072',
-      staining: 'H&E',
-      thumbnail: '/api/placeholder/300/200',
-      fullImage: '/api/placeholder/1200/800',
-      analysis: 'completed'
-    },
-    {
-      id: 3,
-      name: 'Blood_Smear_002.jpg',
-      type: 'blood',
-      resolution: '100x',
-      size: '1024x768',
-      staining: 'May-Grünwald',
-      thumbnail: '/api/placeholder/300/200',
-      fullImage: '/api/placeholder/1200/800',
-      analysis: 'processing'
-    }
-  ]
+  }) : []
+
+  // Combine sample images with uploaded images
+  const allImages = [...wsiImages, ...uploadedImages]
 
   const handleImageSelect = (image) => {
     setIsLoading(true)
     setSelectedImage(image)
+    setAnnotations([]) // Clear annotations when switching images
+    setZoomLevel(1) // Reset zoom level
+    setPosition({ x: 0, y: 0 }) // Reset position
     
     // Simulate image loading
     setTimeout(() => {
@@ -129,25 +183,138 @@ export function WSIViewer({ onNext, sample }) {
   }
 
   const handleAnnotation = (x, y) => {
+    if (activeTool !== 'annotate') return
+    
+    // Convert viewport coordinates to image coordinates
+    // Account for the transform (scale and translate)
+    const imageX = (x - position.x) / zoomLevel
+    const imageY = (y - position.y) / zoomLevel
+    
     const newAnnotation = {
       id: Date.now(),
-      x: x,
-      y: y,
+      x: imageX,
+      y: imageY,
       type: 'marker',
-      note: `Annotation at ${x}, ${y}`
+      note: `Annotation at ${Math.round(imageX)}, ${Math.round(imageY)}`
     }
     setAnnotations(prev => [...prev, newAnnotation])
     toast.info("Annotation added")
   }
 
-  const proceedToAnalysis = () => {
+  const handleMouseDown = (e) => {
+    if (activeTool === 'pan') {
+      setIsDragging(true)
+      setDragStart({
+        x: e.clientX - position.x,
+        y: e.clientY - position.y
+      })
+    }
+  }
+
+  const handleMouseMove = (e) => {
+    if (isDragging && activeTool === 'pan') {
+      setPosition({
+        x: e.clientX - dragStart.x,
+        y: e.clientY - dragStart.y
+      })
+    }
+  }
+
+  const handleMouseUp = () => {
+    setIsDragging(false)
+  }
+
+  const proceedToAnalysis = async () => {
     if (!selectedImage) {
       toast.error("Please select an image to analyze")
       return
     }
     
-    toast.success("Proceeding to AI Analysis...")
-    setTimeout(() => onNext(), 1500)
+    // Check if we have uploaded images that need analysis
+    const imagesToAnalyze = uploadedImages.filter(img => img.file)
+    
+    if (imagesToAnalyze.length === 0) {
+      // No new uploads, just proceed with existing sample data
+      toast.success("Proceeding to AI Analysis...")
+      setTimeout(() => onNext(), 1500)
+      return
+    }
+    
+    // Analyze uploaded images with ML
+    try {
+      setIsLoading(true)
+      toast.info(`Analyzing ${imagesToAnalyze.length} image(s) with ML model...`)
+      
+      const formData = new FormData()
+      
+      // Add all uploaded image files
+      imagesToAnalyze.forEach((img, index) => {
+        formData.append('images', img.file)
+      })
+      
+      // Add patient info if available from sample
+      if (sample?.patientInfo) {
+        formData.append('patientInfo', JSON.stringify(sample.patientInfo))
+      } else {
+        formData.append('patientInfo', JSON.stringify({
+          name: 'Unknown Patient',
+          age: 0,
+          gender: 'Unknown'
+        }))
+      }
+      
+      // Call backend ML analysis endpoint
+      const response = await fetch('http://localhost:5001/api/samples/upload-with-analysis', {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (!response.ok) {
+        let errorMessage = 'Analysis failed'
+        try {
+          const errorData = await response.json()
+          errorMessage = errorData.error || errorData.message || errorMessage
+        } catch (parseError) {
+          // If response is not JSON, use status text
+          errorMessage = `Server error: ${response.statusText || response.status}`
+        }
+        throw new Error(errorMessage)
+      }
+      
+      const result = await response.json()
+      console.log('✅ ML Analysis complete:', result)
+      
+      // Update the sample with analysis results
+      if (result.sample) {
+        let updatedSample
+        if (sample) {
+          // Merge with existing sample
+          updatedSample = {
+            ...sample,
+            images: [...(sample.images || []), ...(result.sample.images || [])]
+          }
+        } else {
+          // Use the new sample
+          updatedSample = result.sample
+        }
+        
+        console.log('🔬 Updated sample with ML results:', updatedSample)
+        
+        // Pass updated sample back to parent
+        if (onSampleUpdated) {
+          onSampleUpdated(updatedSample)
+        }
+      }
+      
+      toast.success(`Analysis complete! ${result.sample?.images?.length || 0} images analyzed.`)
+      setTimeout(() => onNext(), 1500)
+      
+    } catch (error) {
+      console.error('Analysis error:', error)
+      toast.error(`Analysis failed: ${error.message}`)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -170,54 +337,119 @@ export function WSIViewer({ onNext, sample }) {
         <div className="lg:col-span-1">
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Available Images</CardTitle>
-              <CardDescription>
-                Select an image to view and analyze
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">Available Images</CardTitle>
+                  <CardDescription>
+                    Select an image to view and analyze
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {wsiImages.map((image) => (
-                  <div
-                    key={image.id}
-                    className={`border rounded-lg p-3 cursor-pointer transition-all ${
-                      selectedImage?.id === image.id 
-                        ? 'border-primary bg-primary/5' 
-                        : 'border-muted hover:border-primary/50'
-                    }`}
-                    onClick={() => handleImageSelect(image)}
+                {/* Upload Button */}
+                <div className="border-2 border-dashed rounded-lg p-4 text-center hover:border-primary/50 transition-colors">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/jpg,image/png,image/tiff,image/bmp"
+                    multiple
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
                   >
-                    <div className="aspect-video bg-muted rounded mb-2 flex items-center justify-center">
-                      <ImageCard
-                        src={image.thumbnail}
-                        alt={image.name}
-                        className="w-full h-full object-cover rounded"
-                      />
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium truncate">{image.name}</p>
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <Badge variant="secondary" className="text-xs">
-                          {image.type}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs">
-                          {image.resolution}
-                        </Badge>
-                        <Badge 
-                          variant={image.analysis === 'completed' ? 'default' : 
-                                  image.analysis === 'processing' ? 'secondary' : 'outline'}
-                          className="text-xs"
-                        >
-                          {image.analysis}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {image.size} • {image.staining}
-                      </p>
-                    </div>
+                    {isUploading ? (
+                      <>
+                        <Skeleton className="h-4 w-4 mr-2" />
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add New Image
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    JPG, PNG, TIFF, BMP up to 50MB
+                  </p>
+                </div>
+
+                {allImages.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Upload className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">No images available</p>
+                    <p className="text-xs">Upload an image to get started</p>
                   </div>
-                ))}
+                ) : (
+                  allImages.map((image) => (
+                    <div
+                      key={image.id}
+                      className={`relative border rounded-lg p-3 cursor-pointer transition-all ${
+                        selectedImage?.id === image.id 
+                          ? 'border-primary bg-primary/5' 
+                          : 'border-muted hover:border-primary/50'
+                      }`}
+                      onClick={() => handleImageSelect(image)}
+                    >
+                      {/* Remove button for uploaded images */}
+                      {image.type === 'uploaded' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="absolute top-1 right-1 z-10 h-6 w-6 p-0 hover:bg-destructive hover:text-destructive-foreground"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleRemoveImage(image.id)
+                          }}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      )}
+                      
+                      <div className="aspect-video bg-muted rounded mb-2 flex items-center justify-center">
+                        <ImageCard
+                          src={image.thumbnail}
+                          alt={image.name}
+                          className="w-full h-full object-cover rounded"
+                        />
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium truncate">{image.name}</p>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <Badge variant="secondary" className="text-xs">
+                            {image.type}
+                          </Badge>
+                          {image.resolution && image.resolution !== 'N/A' && (
+                            <Badge variant="outline" className="text-xs">
+                              {image.resolution}
+                            </Badge>
+                          )}
+                          {image.analysis && image.analysis !== 'pending' && (
+                            <Badge 
+                              variant={image.analysis === 'completed' ? 'default' : 'secondary'}
+                              className="text-xs"
+                            >
+                              {image.analysis}
+                            </Badge>
+                          )}
+                        </div>
+                        {image.staining && image.staining !== 'Unknown' && (
+                          <p className="text-xs text-muted-foreground">
+                            {image.staining}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </CardContent>
           </Card>
@@ -328,35 +560,49 @@ export function WSIViewer({ onNext, sample }) {
                     <TooltipProvider>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button variant="outline" size="sm">
+                          <Button 
+                            variant={activeTool === 'pan' ? 'default' : 'outline'} 
+                            size="sm"
+                            onClick={() => setActiveTool('pan')}
+                          >
                             <Move className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
-                        <TooltipContent>Pan Tool</TooltipContent>
+                        <TooltipContent>Pan Tool (Drag to move)</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
 
                     <TooltipProvider>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button variant="outline" size="sm">
+                          <Button 
+                            variant={activeTool === 'annotate' ? 'default' : 'outline'} 
+                            size="sm"
+                            onClick={() => setActiveTool('annotate')}
+                          >
                             <Target className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
-                        <TooltipContent>Annotation Tool</TooltipContent>
+                        <TooltipContent>Annotation Tool (Click to mark)</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </div>
 
                   {/* Image Viewer Area */}
                   <div 
-                    className="relative h-96 bg-muted/50 overflow-hidden"
+                    className={`relative h-96 bg-muted/50 overflow-hidden ${activeTool === 'pan' ? 'cursor-move' : 'cursor-crosshair'}`}
                     onClick={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect()
-                      const x = e.clientX - rect.left
-                      const y = e.clientY - rect.top
-                      handleAnnotation(x, y)
+                      if (activeTool === 'annotate') {
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const x = e.clientX - rect.left
+                        const y = e.clientY - rect.top
+                        handleAnnotation(x, y)
+                      }
                     }}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
                   >
                     {isLoading ? (
                       <div className="flex items-center justify-center h-full">
@@ -408,69 +654,19 @@ export function WSIViewer({ onNext, sample }) {
                           </div>
                         )}
 
-                        {/* Annotations */}
+                        {/* Annotations - move with the image */}
                         {annotations.map((annotation) => (
                           <div
                             key={annotation.id}
-                            className="absolute w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-lg"
+                            className="absolute w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-lg pointer-events-none"
                             style={{
-                              left: annotation.x - 6,
-                              top: annotation.y - 6,
-                              transform: `scale(${1/zoomLevel})`
+                              left: `${annotation.x}px`,
+                              top: `${annotation.y}px`,
+                              marginLeft: '-6px',
+                              marginTop: '-6px'
                             }}
                           />
                         ))}
-
-                        {/* ML Analysis Overlay */}
-                        {selectedImage.mlAnalysis && (
-                          <div className="absolute top-4 right-4 z-20 max-w-xs">
-                            <Card className="bg-background/95 backdrop-blur-sm">
-                              <CardHeader className="pb-2">
-                                <CardTitle className="text-sm flex items-center gap-2">
-                                  <Target className="h-4 w-4" />
-                                  AI Analysis Results
-                                </CardTitle>
-                              </CardHeader>
-                              <CardContent className="space-y-2">
-                                <div className="space-y-1">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-muted-foreground">Prediction:</span>
-                                    <Badge variant={selectedImage.mlAnalysis.prediction === 'malignant' ? 'destructive' : 'secondary'}>
-                                      {selectedImage.mlAnalysis.prediction}
-                                    </Badge>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-muted-foreground">Confidence:</span>
-                                    <span className="text-xs font-mono">
-                                      {(selectedImage.mlAnalysis.confidence * 100).toFixed(1)}%
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-muted-foreground">Risk Score:</span>
-                                    <Badge variant={
-                                      selectedImage.mlAnalysis.riskScore > 0.7 ? 'destructive' :
-                                      selectedImage.mlAnalysis.riskScore > 0.4 ? 'default' : 'secondary'
-                                    }>
-                                      {(selectedImage.mlAnalysis.riskScore * 100).toFixed(0)}%
-                                    </Badge>
-                                  </div>
-                                  {selectedImage.mlAnalysis.detectedFeatures && (
-                                    <div>
-                                      <span className="text-xs text-muted-foreground">Features:</span>
-                                      <div className="flex flex-wrap gap-1 mt-1">
-                                        {selectedImage.mlAnalysis.detectedFeatures.map((feature, idx) => (
-                                          <Badge key={idx} variant="outline" className="text-xs">
-                                            {feature}
-                                          </Badge>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </CardContent>
-                            </Card>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>

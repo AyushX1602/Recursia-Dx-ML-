@@ -44,29 +44,37 @@ class TumorPredictor:
     def build_model(self):
         """
         Build the ResNet50-based model for tumor classification.
+        Matches the structure of best_resnet50_model.pth with 'backbone.' prefix.
         """
         try:
-            # Load pre-trained ResNet50
-            self.model = resnet50(pretrained=True)
+            # Create a wrapper class to match the trained model structure
+            class BackboneWrapper(nn.Module):
+                def __init__(self):
+                    super(BackboneWrapper, self).__init__()
+                    # Load pre-trained ResNet50
+                    self.backbone = resnet50(pretrained=False)
+                    
+                    # Modify the final layer for binary classification (single output)
+                    num_features = self.backbone.fc.in_features
+                    self.backbone.fc = nn.Sequential(
+                        nn.Dropout(0.5),
+                        nn.Linear(num_features, 512),      # fc.1
+                        nn.ReLU(inplace=True),
+                        nn.Dropout(0.3),
+                        nn.Linear(512, 1),                  # fc.4 (binary: single output)
+                        nn.Sigmoid()                        # Sigmoid for binary classification
+                    )
+                
+                def forward(self, x):
+                    return self.backbone(x)
             
-            # Modify the final layer for binary classification
-            num_features = self.model.fc.in_features
-            self.model.fc = nn.Sequential(
-                nn.Dropout(0.5),
-                nn.Linear(num_features, 512),
-                nn.ReLU(inplace=True),
-                nn.Dropout(0.3),
-                nn.Linear(512, 256),
-                nn.ReLU(inplace=True),
-                nn.Linear(256, self.num_classes),
-                nn.Softmax(dim=1)
-            )
+            self.model = BackboneWrapper()
             
             # Move model to device
             self.model = self.model.to(self.device)
             self.model.eval()
             
-            logger.info("Model built successfully")
+            logger.info("Model built successfully with backbone wrapper")
             return self.model
             
         except Exception as e:
@@ -126,12 +134,16 @@ class TumorPredictor:
             # Make prediction
             with torch.no_grad():
                 prediction = self.model(processed_image)
-                probabilities = prediction.cpu().numpy()[0]
+                # Model outputs single value (0-1) with Sigmoid
+                tumor_probability = float(prediction.cpu().numpy()[0][0])
             
-            # Get predicted class and confidence
-            predicted_class_idx = np.argmax(probabilities)
-            confidence = float(probabilities[predicted_class_idx])
+            # Binary classification: tumor probability vs non-tumor probability
+            non_tumor_prob = 1.0 - tumor_probability
+            
+            # Determine predicted class
+            predicted_class_idx = 1 if tumor_probability >= 0.5 else 0
             predicted_class = self.class_names[predicted_class_idx]
+            confidence = tumor_probability if predicted_class_idx == 1 else non_tumor_prob
             
             # Create detailed results
             results = {
@@ -139,8 +151,8 @@ class TumorPredictor:
                 'confidence': confidence,
                 'is_tumor': predicted_class_idx == 1,
                 'probabilities': {
-                    'non_tumor': float(probabilities[0]),
-                    'tumor': float(probabilities[1])
+                    'non_tumor': non_tumor_prob,
+                    'tumor': tumor_probability
                 },
                 'risk_level': self._get_risk_level(confidence, predicted_class_idx)
             }
@@ -202,7 +214,8 @@ class TumorPredictor:
             if self.model is None:
                 self.build_model()
             
-            # Load the saved state dict
+            # Load the saved state dict with CPU mapping
+            logger.info(f"Loading model from {model_path}...")
             checkpoint = torch.load(model_path, map_location=self.device)
             
             # Handle different checkpoint formats
@@ -216,16 +229,16 @@ class TumorPredictor:
             else:
                 state_dict = checkpoint
             
-            self.model.load_state_dict(state_dict)
+            # Model already has backbone wrapper, so state_dict should match directly
+            self.model.load_state_dict(state_dict, strict=True)
             self.model.eval()
             
-            logger.info(f"Model loaded successfully from {model_path}")
+            logger.info(f"✅ Model loaded successfully from {model_path} on {self.device}")
             
         except Exception as e:
-            logger.error(f"Error loading model: {str(e)}")
-            # If loading fails, try to build a new model
-            logger.info("Attempting to build new model...")
-            self.build_model()
+            logger.error(f"❌ Error loading model: {str(e)}")
+            logger.error("Model file structure doesn't match expected architecture")
+            raise
     
     def save_model(self, model_path):
         """

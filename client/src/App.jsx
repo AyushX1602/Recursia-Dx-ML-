@@ -10,7 +10,6 @@ import { WSIViewer } from './components/WSIViewer'
 import { AnalysisDashboard } from './components/AnalysisDashboard'
 import { ResultsReview } from './components/ResultsReview'
 import { ReportGeneration } from './components/ReportGeneration'
-import { MLDemo } from './components/MLDemo'
 import { Toaster } from '@/components/ui/sonner'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
@@ -126,6 +125,10 @@ const AppContent = () => {
         return <WSIViewer 
           onNext={() => setActiveTab('analysis')} 
           sample={currentSample}
+          onSampleUpdated={(updatedSample) => {
+            console.log('🔬 App: Sample updated from WSI viewer:', updatedSample)
+            setCurrentSample(updatedSample)
+          }}
         />
       case 'analysis':
       case 'analysis-blood':
@@ -135,8 +138,6 @@ const AppContent = () => {
           analysisType={activeTab.includes('blood') ? 'blood' : activeTab.includes('tissue') ? 'tissue' : 'general'}
           sample={currentSample}
         />
-      case 'ml-demo':
-        return <MLDemo />
       case 'review':
         return <ResultsReview 
           onNext={() => setActiveTab('report')} 

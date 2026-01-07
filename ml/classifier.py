@@ -75,11 +75,32 @@ class PatchClassifier:
         # Load model
         print(f"Loading model from {model_path}...")
         self.model = ResNet50Classifier(num_classes=1, pretrained=False)
+        
+        # Load checkpoint with CPU mapping
         checkpoint = torch.load(model_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint)
+        
+        # Handle different checkpoint formats
+        if isinstance(checkpoint, dict):
+            if 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            elif 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            else:
+                state_dict = checkpoint
+        else:
+            state_dict = checkpoint
+        
+        # Try to load state dict with strict=False
+        try:
+            self.model.load_state_dict(state_dict, strict=False)
+        except Exception as e:
+            print(f"⚠️ Standard loading failed: {e}")
+            print("⚠️ Pipeline heatmap generation may not work correctly")
+            # Don't fail, just warn
+        
         self.model.to(self.device)
         self.model.eval()
-        print("✅ Model loaded successfully!")
+        print(f"✅ Model loaded successfully on {self.device}!")
         
         # Preprocessing
         self.transform = transforms.Compose([

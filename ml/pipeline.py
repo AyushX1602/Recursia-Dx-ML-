@@ -21,10 +21,10 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
-from .tiling import GigapixelTiler, PatchExtractor
-from .classifier import PatchClassifier
-from .aggregation import HeatmapGenerator, LesionDetector, calculate_tumor_burden
-from .attention import MultiScaleAttention, aggregate_patch_attentions
+from tiling import GigapixelTiler, PatchExtractor
+from classifier import PatchClassifier
+from aggregation import HeatmapGenerator, LesionDetector, calculate_tumor_burden
+from attention import MultiScaleAttention, aggregate_patch_attentions
 
 
 class HistopathologyPipeline:
