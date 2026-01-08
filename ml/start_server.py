@@ -166,8 +166,14 @@ def start_api_server(host='0.0.0.0', port=5000, debug=False, workers=1):
     logger = logging.getLogger(__name__)
     
     try:
-        # Import the Flask app
-        from api.app import app
+        # Import the Flask app and initialization function
+        from api.app import app, initialize_models
+        
+        # Initialize all models (tumor, malaria, platelet)
+        logger.info("[INIT] Initializing all ML models...")
+        if not initialize_models():
+            logger.error("[ERROR] Failed to initialize models")
+            return False
         
         if workers > 1:
             # Use Gunicorn for production

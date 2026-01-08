@@ -41,9 +41,12 @@ class MLService {
     }
   }
 
-  static async batchPredict(imagePaths) {
+  static async batchPredict(imagePaths, imageType = 'tissue') {
     try {
       const formData = new FormData();
+      
+      // Add imageType to form data for ML API routing
+      formData.append('imageType', imageType);
       
       imagePaths.forEach(({ path, filename }) => {
         formData.append('images', fs.createReadStream(path), filename);
@@ -68,6 +71,8 @@ class MLService {
       return {
         success: true,
         predictions: result.results, // ML server returns 'results' not 'predictions'
+        imageType: result.image_type, // Return imageType from ML response
+        modelUsed: result.model_used, // Return which model was used
         summary: {
           total_images: result.total_images,
           successful_predictions: result.successful_predictions,

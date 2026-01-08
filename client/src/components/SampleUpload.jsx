@@ -24,7 +24,7 @@ export function SampleUpload({ onNext, onSampleCreated }) {
       contactNumber: '',
       address: ''
     },
-    sampleType: '',
+    imageType: '', // Added: tissue or blood smear
     specimenDetails: {
       organ: '',
       site: '',
@@ -58,10 +58,6 @@ export function SampleUpload({ onNext, onSampleCreated }) {
     'Enlarged Lymph Nodes', 'Bone Pain', 'Easy Bruising'
   ]
 
-  const sampleTypes = [
-    'Blood Smear', 'Tissue Biopsy', 'Bone Marrow', 
-    'Cytology', 'Fine Needle Aspirate', 'Other'
-  ]
 
   const handleInputChange = (section, field, value) => {
     setPatientData(prev => ({
@@ -117,8 +113,8 @@ export function SampleUpload({ onNext, onSampleCreated }) {
 
   const handleSubmit = async () => {
     // Validation
-    if (!patientData.patientInfo.patientId || !patientData.patientInfo.name || !patientData.sampleType) {
-      toast.error("Please fill in required patient information and sample type")
+    if (!patientData.patientInfo.patientId || !patientData.patientInfo.name || !patientData.imageType) {
+      toast.error("Please fill in required patient information and image type")
       return
     }
     
@@ -283,7 +279,7 @@ export function SampleUpload({ onNext, onSampleCreated }) {
                 </div>
                 <div className="space-y-2">
                   <Label>Gender *</Label>
-                  <Select onValueChange={(value) => handleInputChange('patientInfo', 'gender', value)}>
+                  <Select value={patientData.patientInfo.gender} onValueChange={(value) => handleInputChange('patientInfo', 'gender', value)}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select gender" />
                     </SelectTrigger>
@@ -312,33 +308,37 @@ export function SampleUpload({ onNext, onSampleCreated }) {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label>Test Type</Label>
-                  <Select onValueChange={(value) => setPatientData(prev => ({...prev, testType: value}))}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select test type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="blood">Blood Test</SelectItem>
-                      <SelectItem value="tissue">Tissue Biopsy</SelectItem>
-                      <SelectItem value="both">Both</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
               </div>
 
               <div className="space-y-3">
-                <Label>Sample Type *</Label>
-                <Select onValueChange={(value) => setPatientData(prev => ({...prev, sampleType: value}))}>
+                <Label className="flex items-center gap-2">
+                  Image Type *
+                  <Badge variant="outline" className="text-xs">
+                    For ML Analysis
+                  </Badge>
+                </Label>
+                <Select value={patientData.imageType} onValueChange={(value) => setPatientData(prev => ({...prev, imageType: value}))}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select sample type" />
+                    <SelectValue placeholder="Select image type for AI analysis" />
                   </SelectTrigger>
                   <SelectContent>
-                    {sampleTypes.map(type => (
-                      <SelectItem key={type} value={type}>{type}</SelectItem>
-                    ))}
+                    <SelectItem value="tissue">
+                      <div className="flex items-center gap-2">
+                        <Brain className="h-4 w-4" />
+                        <span>Tissue Image (Histopathology)</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="blood">
+                      <div className="flex items-center gap-2">
+                        <Droplets className="h-4 w-4" />
+                        <span>Blood Smear Image</span>
+                      </div>
+                    </SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Select the type of medical image you will upload for AI analysis
+                </p>
               </div>
 
               <div className="space-y-3">
@@ -545,8 +545,21 @@ export function SampleUpload({ onNext, onSampleCreated }) {
                   <p className="text-sm text-muted-foreground">{patientData.patientInfo.name || 'Not provided'}</p>
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">Sample Type</Label>
-                  <p className="text-sm text-muted-foreground">{patientData.sampleType || 'Not selected'}</p>
+
+                  <Label className="text-sm font-medium">Image Type</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {patientData.imageType === 'tissue' ? (
+                      <span className="flex items-center gap-1">
+                        <Brain className="h-3 w-3" />
+                        Tissue Image (Histopathology)
+                      </span>
+                    ) : patientData.imageType === 'blood' ? (
+                      <span className="flex items-center gap-1">
+                        <Droplets className="h-3 w-3" />
+                        Blood Smear Image
+                      </span>
+                    ) : 'Not selected'}
+                  </p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Files Uploaded</Label>
@@ -594,7 +607,7 @@ export function SampleUpload({ onNext, onSampleCreated }) {
               <Button 
                 onClick={handleSubmit} 
                 className="w-full"
-                disabled={isAnalyzing || !patientData.patientInfo.patientId || !patientData.patientInfo.name || !patientData.sampleType || uploadedFiles.length === 0}
+                disabled={isAnalyzing || !patientData.patientInfo.patientId || !patientData.patientInfo.name || !patientData.imageType || uploadedFiles.length === 0}
               >
                 {isAnalyzing ? (
                   <>

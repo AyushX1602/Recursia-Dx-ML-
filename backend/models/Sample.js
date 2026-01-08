@@ -117,7 +117,23 @@ const sampleSchema = new mongoose.Schema({
       imageId: String,
       modelVersion: String,
       analyzedAt: { type: Date, default: Date.now },
-      metadata: mongoose.Schema.Types.Mixed
+      metadata: mongoose.Schema.Types.Mixed,
+      // Blood analysis specific fields
+      bloodAnalysis: {
+        malaria: {
+          status: String,
+          confidence: Number,
+          isParasitized: Boolean,
+          probabilities: mongoose.Schema.Types.Mixed
+        },
+        cellCount: {
+          platelets: Number,
+          rbc: Number,
+          wbc: Number,
+          totalCells: Number,
+          status: String
+        }
+      }
     }
   }],
   aiAnalysis: {

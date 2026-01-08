@@ -344,6 +344,13 @@ router.post('/upload-with-analysis',
         }
       }
       
+      // Extract imageType from sampleData (frontend sends it nested in patientData)
+      const imageType = sampleData.imageType || req.body.imageType || 'tissue';
+      console.log(`📋 Processing ${imageType} image(s)`);
+      
+      // Set sampleType based on imageType selection
+      sampleData.sampleType = imageType === 'blood' ? 'Blood Smear' : 'Tissue Biopsy';
+      
       // CRITICAL: Check if ML service is available
       const mlHealthCheck = await MLService.checkHealth();
       if (!mlHealthCheck.healthy) {
@@ -362,17 +369,19 @@ router.post('/upload-with-analysis',
       const processedImages = [];
       
       if (req.files && req.files.length > 0) {
-        console.log(`Processing ${req.files.length} uploaded images...`);
+        console.log(`Processing ${req.files.length} uploaded ${imageType} images...`);
         
-        // Prepare images for ML analysis
+        // Prepare images for ML analysis with imageType
         const imagePathsForML = req.files.map(file => ({
           path: file.path,
           filename: file.filename
         }));
         
-        // Run batch ML analysis - REAL ANALYSIS ONLY
-        console.log('🧠 Running real ML analysis...');
-        const mlResults = await MLService.batchPredict(imagePathsForML);
+        // Run batch ML analysis - REAL ANALYSIS ONLY, passing imageType
+        console.log(`🧠 Running real ML analysis for ${imageType} images...`);
+        const mlResults = await MLService.batchPredict(imagePathsForML, imageType);
+        
+        console.log(`📊 ML Results received:`, JSON.stringify(mlResults, null, 2));
         
         if (!mlResults.success) {
           // If ML fails, don't provide mock data - fail the request
@@ -400,50 +409,100 @@ router.post('/upload-with-analysis',
           };
           
           // Add ML analysis if available
-          if (mlResult) {
-            // Map ML predictions to schema enums
-            const mapPrediction = (predicted_class) => {
-              switch(predicted_class) {
-                case 'Non-Tumor': return 'benign';
-                case 'Tumor': return 'malignant';
-                default: return 'indeterminate';
-              }
-            };
-
-            const mapRiskAssessment = (risk) => {
-              if (risk && typeof risk === 'string') {
-                switch(risk.toLowerCase()) {
-                  case 'low risk': return 'low';
-                  case 'medium risk': return 'medium';
-                  case 'high risk': return 'high';
-                  default: return 'medium';
+          if (mlResult && mlResult.prediction) {
+            const prediction = mlResult.prediction;
+            
+            // Handle different result formats based on imageType
+            if (imageType === 'blood') {
+              // Blood smear analysis - malaria + platelet count
+              const malariaResult = prediction.malaria_detection || {};
+              const plateletResult = prediction.blood_cell_count || {};
+              
+              // Map risk_level to lowercase enum value
+              const mapBloodRiskLevel = (risk) => {
+                if (risk && typeof risk === 'string') {
+                  const lower = risk.toLowerCase();
+                  if (lower.includes('high')) return 'high';
+                  if (lower.includes('low')) return 'low';
                 }
-              }
-              return 'medium';
-            };
+                return 'medium';
+              };
+              
+              imageData.mlAnalysis = {
+                prediction: malariaResult.predicted_class === 'Parasitized' ? 'malignant' : 'benign',
+                confidence: Number(malariaResult.confidence) || 0.5,
+                riskAssessment: mapBloodRiskLevel(malariaResult.risk_level),
+                processingTime: mlResult.processing_time || 0,
+                imageId: mlResult.image_id || file.filename,
+                modelVersion: 'Blood-Analysis-v1.0',
+                analyzedAt: new Date(),
+                bloodAnalysis: {
+                  malaria: {
+                    status: malariaResult.predicted_class || 'Unknown',
+                    confidence: malariaResult.confidence || 0,
+                    isParasitized: malariaResult.is_parasitized || false,
+                    probabilities: malariaResult.probabilities || {}
+                  },
+                  cellCount: {
+                    platelets: plateletResult.counts?.Platelets || 0,
+                    rbc: plateletResult.counts?.RBC || 0,
+                    wbc: plateletResult.counts?.WBC || 0,
+                    totalCells: plateletResult.total_cells || 0,
+                    status: plateletResult.status || 'unknown'
+                  }
+                },
+                metadata: mlResult
+              };
+              console.log(`🩸 Blood analysis data structured for ${file.filename}:`, JSON.stringify(imageData.mlAnalysis, null, 2));
+            } else {
+              // Tissue analysis - tumor detection
+              const mapPrediction = (predicted_class) => {
+                switch(predicted_class) {
+                  case 'Non-Tumor': return 'benign';
+                  case 'Tumor': return 'malignant';
+                  default: return 'indeterminate';
+                }
+              };
 
-            imageData.mlAnalysis = {
-              prediction: mapPrediction(mlResult.predicted_class),
-              confidence: Number(mlResult.confidence) || 0.5,
-              riskAssessment: mapRiskAssessment(mlResult.risk_assessment),
-              processingTime: mlResult.processing_time || 0,
-              imageId: mlResult.image_id || file.filename,
-              modelVersion: 'ResNet50-v1.0',
-              analyzedAt: new Date(),
-              metadata: mlResult
-            };
+              const mapRiskAssessment = (risk) => {
+                if (risk && typeof risk === 'string') {
+                  switch(risk.toLowerCase()) {
+                    case 'low risk': return 'low';
+                    case 'medium risk': return 'medium';
+                    case 'high risk': return 'high';
+                    default: return 'medium';
+                  }
+                }
+                return 'medium';
+              };
+
+              imageData.mlAnalysis = {
+                prediction: mapPrediction(prediction.predicted_class),
+                confidence: Number(prediction.confidence) || 0.5,
+                riskAssessment: mapRiskAssessment(prediction.risk_assessment),
+                processingTime: prediction.processing_time || 0,
+                imageId: prediction.image_id || file.filename,
+                modelVersion: 'ResNet50-v1.0',
+                analyzedAt: new Date(),
+                metadata: mlResult
+              };
+            }
           }
           
-          // Generate REAL heatmap using ML service - NO RANDOM MOCK DATA
-          console.log(`🎨 Generating real heatmap for image ${i + 1}/${req.files.length}`);
-          const heatmapResult = await generateRealHeatmap(file.path, file.filename);
-          
-          if (heatmapResult.success) {
-            imageData.heatmap = heatmapResult.heatmap;
-            console.log(`✅ Real heatmap generated for ${file.filename}`);
+          // Generate REAL heatmap using ML service - Only for tissue images
+          if (imageType === 'tissue') {
+            console.log(`🎨 Generating real heatmap for image ${i + 1}/${req.files.length}`);
+            const heatmapResult = await generateRealHeatmap(file.path, file.filename);
+            
+            if (heatmapResult.success) {
+              imageData.heatmap = heatmapResult.heatmap;
+              console.log(`✅ Real heatmap generated for ${file.filename}`);
+            } else {
+              console.log(`⚠️ Heatmap generation skipped for ${file.filename}: ${heatmapResult.error}`);
+              // Don't add mock heatmap - leave it undefined
+            }
           } else {
-            console.log(`⚠️ Heatmap generation skipped for ${file.filename}: ${heatmapResult.error}`);
-            // Don't add mock heatmap - leave it undefined
+            console.log(`⏭️ Skipping heatmap generation for blood smear image`);
           }
           
           processedImages.push(imageData);

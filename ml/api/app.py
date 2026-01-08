@@ -29,12 +29,14 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.tumor_predictor import TumorPredictor
+from models.malaria_predictor import MalariaPredictor
+from models.platelet_counter import PlateletCounter
 from utils.image_utils import validate_image_format, get_image_info, enhance_medical_image
 from utils.data_manager import DataManager, save_prediction_report, validate_prediction_data
 from config.config import get_config, ERROR_MESSAGES
-from pipeline import HistopathologyPipeline
-from classifier import PatchClassifier
-from aggregation import HeatmapGenerator
+# from pipeline import HistopathologyPipeline  # Commented out - not needed for predictions
+# from classifier import PatchClassifier  # Commented out - not needed for predictions
+# from aggregation import HeatmapGenerator  # Commented out - not needed for predictions
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -60,7 +62,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize components
-predictor = None
+tumor_predictor = None
+malaria_predictor = None
+platelet_counter = None
 pipeline = None
 data_manager = DataManager(str(config.DATABASE_PATH))
 
@@ -79,9 +83,9 @@ def convert_numpy_types(obj):
     else:
         return obj
 
-def initialize_model():
-    """Initialize the tumor prediction model."""
-    global predictor, pipeline
+def initialize_models():
+    """Initialize all ML models: tumor, malaria, and platelet detection."""
+    global tumor_predictor, malaria_predictor, platelet_counter, pipeline
     try:
         # ===================================================
         # 🔒 PYTORCH DETERMINISTIC SETUP
@@ -100,40 +104,75 @@ def initialize_model():
         except Exception as det_error:
             logger.warning(f"⚠️ Could not enable deterministic algorithms: {det_error}")
         
-        predictor = TumorPredictor()
+        # ===================================================
+        # INITIALIZE TUMOR DETECTION MODEL (for tissue images)
+        # ===================================================
+        tumor_predictor = TumorPredictor()
         
-        # Check for model file
-        model_path = os.path.join(os.path.dirname(__file__), '..', 'models', '__pycache__', 'best_resnet50_model.pth')
+        # Check for tumor model file
+        tumor_model_path = os.path.join(os.path.dirname(__file__), '..', 'models', '__pycache__', 'best_resnet50_model.pth')
         
-        if os.path.exists(model_path):
-            logger.info(f"✅ Found trained model at: {model_path}")
-            predictor.load_model(model_path)
-            logger.info("✅ Pre-trained model loaded successfully")
+        if os.path.exists(tumor_model_path):
+            logger.info(f"✅ Found tumor detection model at: {tumor_model_path}")
+            tumor_predictor.load_model(tumor_model_path)
+            logger.info("✅ Tumor detection model loaded successfully")
             
             # Initialize the pipeline for heatmap generation
-            try:
-                pipeline = HistopathologyPipeline(
-                    model_path=model_path,
-                    patch_size=224,
-                    overlap=0.25,
-                    detection_threshold=0.5,
-                    verbose=False
-                )
-                logger.info("✅ Histopathology pipeline initialized")
-            except Exception as pipeline_error:
-                logger.warning(f"⚠️ Pipeline initialization failed: {pipeline_error}")
-                pipeline = None
+            # try:
+            #     pipeline = HistopathologyPipeline(
+            #         model_path=tumor_model_path,
+            #         patch_size=224,
+            #         overlap=0.25,
+            #         detection_threshold=0.5,
+            #         verbose=False
+            #     )
+            #     logger.info("✅ Histopathology pipeline initialized")
+            # except Exception as pipeline_error:
+            #     logger.warning(f"⚠️ Pipeline initialization failed: {pipeline_error}")
+            #     pipeline = None
         else:
-            logger.error(f"❌ Model file not found at: {model_path}")
-            logger.error("❌ Cannot proceed without trained model")
-            return False
+            logger.warning(f"⚠️ Tumor model not found at: {tumor_model_path}")
         
-        # Ensure model is in evaluation mode
+        # Ensure tumor model is in evaluation mode
         try:
-            predictor.model.eval()
-            logger.info("✅ Model set to evaluation mode for deterministic inference")
+            tumor_predictor.model.eval()
+            logger.info("✅ Tumor model set to evaluation mode")
         except Exception as eval_error:
-            logger.warning(f"⚠️ Could not set model to eval mode: {eval_error}")
+            logger.warning(f"⚠️ Could not set tumor model to eval mode: {eval_error}")
+        
+        # ===================================================
+        # INITIALIZE MALARIA DETECTION MODEL (for blood smear images)
+        # ===================================================
+        try:
+            malaria_model_path = os.path.join(os.path.dirname(__file__), '..', 'models', '__pycache__', 'best_resnet50_malaria_model.pth')
+            malaria_predictor = MalariaPredictor(model_path=malaria_model_path)
+            if malaria_predictor.model is not None:
+                logger.info("✅ Malaria detection model loaded successfully")
+            else:
+                logger.warning("⚠️ Malaria detection model not available")
+        except Exception as mal_error:
+            logger.warning(f"⚠️ Could not load malaria model: {mal_error}")
+            malaria_predictor = None
+        
+        # ===================================================
+        # INITIALIZE PLATELET COUNTER (for blood smear images)
+        # ===================================================
+        try:
+            platelet_counter = PlateletCounter()
+            if platelet_counter.model is not None:
+                logger.info("✅ Platelet counting model loaded successfully")
+            else:
+                logger.warning("⚠️ Platelet counting model not available")
+        except Exception as plat_error:
+            logger.warning(f"⚠️ Could not load platelet counter: {plat_error}")
+            platelet_counter = None
+        
+        logger.info("="*70)
+        logger.info("✅ Server initialization complete")
+        logger.info(f"   - Tumor Detection: {'✓' if tumor_predictor and tumor_predictor.model else '✗'}")
+        logger.info(f"   - Malaria Detection: {'✓' if malaria_predictor and malaria_predictor.model else '✗'}")
+        logger.info(f"   - Platelet Counting: {'✓' if platelet_counter and platelet_counter.model else '✗'}")
+        logger.info("="*70)
         
         return True
     except Exception as e:
@@ -165,26 +204,55 @@ def handle_internal_error(e):
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
-    global predictor, pipeline
+    global tumor_predictor, malaria_predictor, platelet_counter, pipeline
     return jsonify({
-        'status': 'healthy' if predictor is not None else 'unavailable',
-        'model_loaded': predictor is not None,
+        'status': 'healthy',
+        'models': {
+            'tumor_detection': tumor_predictor is not None and tumor_predictor.model is not None,
+            'malaria_detection': malaria_predictor is not None and malaria_predictor.model is not None,
+            'platelet_counting': platelet_counter is not None and platelet_counter.model is not None,
+        },
         'pipeline_loaded': pipeline is not None,
         'timestamp': time.time()
     })
 
 @app.route('/predict', methods=['POST'])
 def predict_tumor():
-    """Predict tumor from uploaded image."""
-    global predictor
+    """Predict from uploaded image with routing based on imageType."""
+    global tumor_predictor, malaria_predictor, platelet_counter
     
     try:
-        # Check if model is loaded
-        if predictor is None:
+        # Get imageType parameter to route to correct model
+        image_type = request.form.get('imageType', 'tissue').lower()
+        
+        logger.info(f"📋 Single predict request for imageType: {image_type}")
+        
+        # Route to appropriate model
+        if image_type == 'tissue':
+            if tumor_predictor is None or tumor_predictor.model is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Tumor detection model not loaded'
+                }), 500
+            predictor = tumor_predictor
+            model_name = "Tumor Detection (ResNet50)"
+        elif image_type == 'blood':
+            if malaria_predictor is None or malaria_predictor.model is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Malaria detection model not loaded'
+                }), 500
+            if platelet_counter is None or platelet_counter.model is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Platelet counting model not loaded'
+                }), 500
+            model_name = "Blood Analysis (Malaria + Platelet Count)"
+        else:
             return jsonify({
                 'success': False,
-                'error': ERROR_MESSAGES['model_not_loaded']
-            }), 500
+                'error': f'Invalid imageType: {image_type}. Must be "tissue" or "blood"'
+            }), 400
         
         # Check if image file is present
         if 'image' not in request.files:
@@ -233,8 +301,23 @@ def predict_tumor():
             if enhance_image:
                 image_array = enhance_medical_image(image_array)
             
-            # Make prediction
-            prediction_result = predictor.predict(image_array)
+            # Make prediction based on image type
+            if image_type == 'tissue':
+                # Tumor detection only
+                prediction_result = predictor.predict(image_array)
+            elif image_type == 'blood':
+                # Run both malaria and platelet detection on same image
+                malaria_result = malaria_predictor.predict(image_array)
+                platelet_result = platelet_counter.predict(image_array)
+                
+                # Combine results
+                prediction_result = {
+                    'malaria_detection': malaria_result,
+                    'blood_cell_count': platelet_result,
+                    'predicted_class': 'Blood Analysis Complete',
+                    'confidence': (malaria_result['confidence'] + platelet_result['confidence']) / 2
+                }
+            
             processing_time = time.time() - start_time
             
             # Validate prediction result
@@ -248,6 +331,8 @@ def predict_tumor():
             response_data = {
                 'success': True,
                 'prediction': prediction_result,
+                'image_type': image_type,
+                'model_used': model_name,
                 'image_info': {
                     'filename': filename,
                     'size': image_info.get('size', 'Unknown'),
@@ -255,7 +340,7 @@ def predict_tumor():
                 },
                 'processing_time': round(processing_time, 3),
                 'timestamp': time.time(),
-                'model_version': 'ResNet50_v1'
+                'model_version': model_name
             }
             
             # Save to database if requested
@@ -375,15 +460,42 @@ def predict_tumor_base64():
 
 @app.route('/batch_predict', methods=['POST'])
 def batch_predict():
-    """Predict multiple images at once."""
-    global predictor
+    """Predict multiple images at once with routing based on imageType."""
+    global tumor_predictor, malaria_predictor, platelet_counter
     
     try:
-        if predictor is None:
+        # Get imageType parameter to route to correct model
+        image_type = request.form.get('imageType', 'tissue').lower()
+        
+        logger.info(f"📋 Batch predict request for imageType: {image_type}")
+        
+        # Route to appropriate model
+        if image_type == 'tissue':
+            if tumor_predictor is None or tumor_predictor.model is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Tumor detection model not loaded'
+                }), 500
+            predictor = tumor_predictor
+            model_name = "Tumor Detection (ResNet50)"
+        elif image_type == 'blood':
+            # For blood smear, we'll run both malaria and platelet detection
+            if malaria_predictor is None or malaria_predictor.model is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Malaria detection model not loaded'
+                }), 500
+            if platelet_counter is None or platelet_counter.model is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Platelet counting model not loaded'
+                }), 500
+            model_name = "Blood Analysis (Malaria + Platelet Count)"
+        else:
             return jsonify({
                 'success': False,
-                'error': ERROR_MESSAGES['model_not_loaded']
-            }), 500
+                'error': f'Invalid imageType: {image_type}. Must be "tissue" or "blood"'
+            }), 400
         
         if 'images' not in request.files:
             return jsonify({
@@ -421,16 +533,38 @@ def batch_predict():
                 if enhance_images:
                     image_array = enhance_medical_image(image_array)
                 
-                prediction_result = predictor.predict(image_array)
-                
-                # Convert NumPy types to JSON-serializable types
-                prediction_result = convert_numpy_types(prediction_result)
-                
-                results.append({
-                    'filename': file.filename,
-                    'success': True,
-                    'prediction': prediction_result
-                })
+                # Route based on image type
+                if image_type == 'tissue':
+                    # Tumor detection only
+                    prediction_result = predictor.predict(image_array)
+                    prediction_result = convert_numpy_types(prediction_result)
+                    
+                    results.append({
+                        'filename': file.filename,
+                        'success': True,
+                        'prediction': prediction_result,
+                        'model_used': model_name
+                    })
+                    
+                elif image_type == 'blood':
+                    # Run both malaria and platelet detection on same image
+                    malaria_result = malaria_predictor.predict(image_array)
+                    platelet_result = platelet_counter.predict(image_array)
+                    
+                    # Combine results
+                    combined_result = {
+                        'malaria_detection': convert_numpy_types(malaria_result),
+                        'blood_cell_count': convert_numpy_types(platelet_result),
+                        'predicted_class': 'Blood Analysis Complete',
+                        'confidence': (malaria_result['confidence'] + platelet_result['confidence']) / 2
+                    }
+                    
+                    results.append({
+                        'filename': file.filename,
+                        'success': True,
+                        'prediction': combined_result,
+                        'model_used': model_name
+                    })
                 
             except Exception as e:
                 logger.error(f"Failed to process {file.filename}: {str(e)}")
@@ -445,6 +579,8 @@ def batch_predict():
         return jsonify({
             'success': True,
             'results': results,
+            'image_type': image_type,
+            'model_used': model_name,
             'total_images': len(files),
             'successful_predictions': sum(1 for r in results if r['success']),
             'total_processing_time': round(total_time, 3)
@@ -684,7 +820,7 @@ if __name__ == '__main__':
     logger.info("=" * 70)
     
     # Initialize model
-    if initialize_model():
+    if initialize_models():
         logger.info("✅ Server initialization successful")
         logger.info("=" * 70)
         

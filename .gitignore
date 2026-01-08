@@ -42,3 +42,42 @@ backend/node_modules/
 backend/dist/
 backend/.env
 backend/uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+torch_env/
+
+# ML Model Weights (large files)
+*.pth
+*.pt
+*.h5
+*.onnx
+*.pkl
+*.pickle
+
+# ML Uploads and Results
+ml/uploads/
+ml/results/
+ml/logs/
+ml/data/
+ml/*.db
+
+# Datasets (large folders)
+Malaria-Disease-Detection-Using-Transfer-Learning/
+Platelates/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Keep test samples (small test images)
+!TEST/
+!TEST_SAMPLES/

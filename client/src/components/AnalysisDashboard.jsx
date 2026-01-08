@@ -3,15 +3,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
-import { AutoHeatmapDisplay } from './AutoHeatmapDisplay'
-import { SimpleHeatmapViewer } from './SimpleHeatmapViewer'
-import { SimpleHeatmapDisplay } from './SimpleHeatmapDisplay'
-import { BasicHeatmapTest } from './BasicHeatmapTest'
 import { 
   Brain, 
   Activity, 
@@ -19,24 +14,33 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   Clock,
-  Zap,
   Target,
-  BarChart3,
   PieChart,
-  Thermometer
+  BarChart3
 } from 'lucide-react'
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, BarChart, Bar, PieChart as RechartsPieChart, Cell } from 'recharts'
 
 export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) {
   const [analysisProgress, setAnalysisProgress] = useState(0)
   const [currentStage, setCurrentStage] = useState('preprocessing')
   const [isAnalyzing, setIsAnalyzing] = useState(true)
-  const [results, setResults] = useState(null)
   const [realTimeData, setRealTimeData] = useState(null)
+  const [bloodAnalysisData, setBloodAnalysisData] = useState(null)
+  
+  // Determine image type from sample (blood or tissue)
+  const imageType = sample?.sampleType === 'Blood Smear' ? 'blood' : 'tissue'
+  
+  // State for active tab (allows manual switching between tabs)
+  const [activeTab, setActiveTab] = useState(imageType === 'blood' ? 'blood-analysis' : 'tissue-analysis')
+  
+  // Update active tab when imageType changes
+  useEffect(() => {
+    setActiveTab(imageType === 'blood' ? 'blood-analysis' : 'tissue-analysis')
+  }, [imageType])
 
   // Enhanced debugging for sample data
   console.log('🔍 AnalysisDashboard - Sample data received:', sample)
   console.log('🔍 AnalysisDashboard - Sample type:', typeof sample)
+  console.log('🔍 AnalysisDashboard - Image type:', imageType)
   console.log('🔍 AnalysisDashboard - Sample keys:', sample ? Object.keys(sample) : [])
   
   if (sample?.images) {
@@ -46,6 +50,8 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
         filename: img.filename,
         hasHeatmap: !!img.heatmap,
         hasMLAnalysis: !!img.mlAnalysis,
+        hasBloodAnalysis: !!img.mlAnalysis?.bloodAnalysis,
+        bloodAnalysisData: img.mlAnalysis?.bloodAnalysis,
         heatmapStructure: img.heatmap ? Object.keys(img.heatmap) : null
       })
     })
@@ -117,25 +123,124 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     }
   }
 
+  // Extract blood analysis data (malaria + platelet count)
+  const extractBloodAnalysisData = () => {
+    console.log('🩸 Extracting blood analysis data...')
+    if (!sample || !sample.images || sample.images.length === 0) {
+      console.log('❌ No sample or images found')
+      return null
+    }
+
+    const images = sample.images
+    const mlAnalyses = images.filter(img => img.mlAnalysis?.bloodAnalysis).map(img => img.mlAnalysis)
+    
+    console.log('🩸 ML Analyses with bloodAnalysis:', mlAnalyses.length)
+    console.log('🩸 ML Analyses data:', mlAnalyses)
+    
+    if (mlAnalyses.length === 0) {
+      console.log('❌ No ML analyses with bloodAnalysis found')
+      return null
+    }
+
+    // Aggregate blood analysis results
+    const bloodAnalyses = mlAnalyses.map(a => a.bloodAnalysis).filter(Boolean)
+    console.log('🩸 Blood analyses extracted:', bloodAnalyses)
+    
+    if (bloodAnalyses.length === 0) {
+      console.log('❌ No blood analyses found after filtering')
+      return null
+    }
+
+    // Malaria detection aggregation
+    const malariaResults = bloodAnalyses.map(b => b.malaria).filter(Boolean)
+    const parasitizedCount = malariaResults.filter(m => m.isParasitized).length
+    const avgMalariaConfidence = malariaResults.reduce((sum, m) => sum + (m.confidence || 0), 0) / malariaResults.length
+
+    // Cell count aggregation
+    const cellCounts = bloodAnalyses.map(b => b.cellCount).filter(Boolean)
+    const totalPlatelets = cellCounts.reduce((sum, c) => sum + (c.platelets || 0), 0)
+    const totalRBC = cellCounts.reduce((sum, c) => sum + (c.rbc || 0), 0)
+    const totalWBC = cellCounts.reduce((sum, c) => sum + (c.wbc || 0), 0)
+    const totalCells = cellCounts.reduce((sum, c) => sum + (c.totalCells || 0), 0)
+
+    const result = {
+      totalImages: images.length,
+      analyzedImages: mlAnalyses.length,
+      malaria: {
+        detected: parasitizedCount > 0,
+        parasitizedCount,
+        status: parasitizedCount > 0 ? 'Parasitized' : 'Uninfected',
+        avgConfidence: avgMalariaConfidence,
+        results: malariaResults
+      },
+      cellCount: {
+        platelets: totalPlatelets,
+        rbc: totalRBC,
+        wbc: totalWBC,
+        totalCells: totalCells,
+        status: cellCounts[0]?.status || 'analyzed'
+      },
+      patientInfo: sample.patientInfo || {},
+      analyses: mlAnalyses
+    }
+    
+    console.log('✅ Blood analysis data extracted:', result)
+    return result
+  }
+
   // Initialize real-time data from sample
   useEffect(() => {
-    const extracted = extractRealData()
-    setRealTimeData(extracted)
-    
-    // If we have real data, start with faster analysis
-    if (extracted) {
-      setIsAnalyzing(true)
-      console.log('🔬 Real sample data loaded:', extracted)
+    if (imageType === 'blood') {
+      const bloodData = extractBloodAnalysisData()
+      setBloodAnalysisData(bloodData)
+      if (bloodData) {
+        setIsAnalyzing(true)
+        console.log('🩸 Blood analysis data loaded:', bloodData)
+      } else {
+        setIsAnalyzing(false)
+      }
     } else {
-      // No real data - don't show mock results
-      setIsAnalyzing(false)
-      setResults(null)
+      const extracted = extractRealData()
+      setRealTimeData(extracted)
+      
+      if (extracted) {
+        setIsAnalyzing(true)
+        console.log('🔬 Tissue sample data loaded:', extracted)
+      } else {
+        setIsAnalyzing(false)
+      }
     }
-  }, [sample])
-
-  // Blood test results not available - ResNet50 model only detects tumors in tissue, not blood cells
+  }, [sample, imageType])
 
   const getConfidenceData = () => {
+    // For blood analysis
+    if (imageType === 'blood' && bloodAnalysisData) {
+      const baseConfidence = bloodAnalysisData.malaria.avgConfidence * 100
+      return [
+        { 
+          category: 'Malaria Detection', 
+          confidence: Math.min(98, baseConfidence), 
+          color: bloodAnalysisData.malaria.detected ? '#ef4444' : '#22c55e'
+        },
+        { 
+          category: 'Cell Detection', 
+          confidence: 95, 
+          color: '#3b82f6' 
+        },
+        { 
+          category: 'RBC Analysis', 
+          confidence: 92, 
+          color: '#ef4444' 
+        },
+        { 
+          category: 'Platelet Count', 
+          confidence: 94, 
+          color: '#8b5cf6' 
+        }
+      ]
+    }
+    
+    // For tissue analysis
     if (!realTimeData) {
       return [
         { category: 'Cell Detection', confidence: 96.8, color: '#22c55e' },
@@ -170,32 +275,6 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     ]
   }
 
-  const getHeatmapIntensity = () => {
-    if (!realTimeData || !realTimeData.analyses) {
-      return [
-        { region: 'Region 1', intensity: 0.85, risk: 'high', cells: 156 },
-        { region: 'Region 2', intensity: 0.23, risk: 'low', cells: 34 },
-        { region: 'Region 3', intensity: 0.67, risk: 'medium', cells: 89 },
-        { region: 'Region 4', intensity: 0.12, risk: 'low', cells: 21 },
-        { region: 'Region 5', intensity: 0.91, risk: 'high', cells: 203 }
-      ]
-    }
-
-    return realTimeData.analyses.map((analysis, index) => {
-      const riskAssessment = analysis.riskAssessment || 'medium'
-      const riskLevel = riskAssessment.toLowerCase() === 'high' ? 'high' :
-                       riskAssessment.toLowerCase() === 'medium' ? 'medium' : 'low'
-      
-      return {
-        region: `Region ${index + 1}`,
-        intensity: analysis.confidence || 0.5,
-        risk: riskLevel,
-        cells: Math.floor((analysis.confidence || 0.5) * 200) + Math.floor(Math.random() * 100),
-        tumorProbability: analysis.metadata?.prediction?.probabilities?.tumor || 0
-      }
-    })
-  }
-
   const analysisStages = [
     { id: 'preprocessing', label: 'Image Preprocessing', duration: 15 },
     { id: 'tiling', label: 'WSI Tiling', duration: 25 },
@@ -204,9 +283,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     { id: 'postprocessing', label: 'Result Processing', duration: 10 }
   ]
 
-  // Get dynamic data
   const confidenceData = getConfidenceData()
-  const heatmapIntensity = getHeatmapIntensity()
 
   useEffect(() => {
     if (isAnalyzing) {
@@ -216,46 +293,14 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
             clearInterval(interval)
             setIsAnalyzing(false)
             
-            // Set results based on real data
-            const realResults = realTimeData ? {
-              status: 'completed',
-              accuracy: realTimeData.averageConfidence * 100,
-              processingTime: `${Math.floor(Math.random() * 3) + 1}m ${Math.floor(Math.random() * 40) + 10}s`,
-              anomaliesDetected: realTimeData.tumorCount,
-              tumorPercentage: realTimeData.tumorPercentage,
-              avgTumorProbability: realTimeData.avgTumorProbability,
-              maxTumorProbability: realTimeData.maxTumorProbability,
-              totalImages: realTimeData.totalImages,
-              analyzedImages: realTimeData.analyzedImages,
-              riskAssessment: realTimeData.riskDistribution.high > 0 ? 'High Risk' : 
-                             realTimeData.riskDistribution.moderate > 0 ? 'Moderate Risk' : 'Low Risk',
-              detectedFeatures: realTimeData.detectedFeatures,
-              patientName: realTimeData.patientInfo.name || 'Unknown Patient'
-            } : {
-              status: 'completed',
-              accuracy: 96.8,
-              processingTime: '2m 15s',
-              anomaliesDetected: 3,
-              tumorPercentage: 30.0,
-              avgTumorProbability: 25.5,
-              maxTumorProbability: 45.2,
-              totalImages: 1,
-              analyzedImages: 1,
-              riskAssessment: 'Moderate Risk',
-              detectedFeatures: ['Cell abnormalities'],
-              patientName: 'Sample Patient'
-            }
-            
-            setResults(realResults)
-            const tumorMsg = realResults.tumorPercentage !== undefined ? 
-              `${realResults.tumorPercentage.toFixed(1)}% tumor detected in ${realResults.anomaliesDetected} images` :
-              `${realResults.anomaliesDetected} anomalies detected`
-            toast.success(`AI Analysis completed! ${tumorMsg}.`)
+            // Toast notification for completion
+            const analysisType = imageType === 'blood' ? 'Blood analysis' : 'Tissue analysis'
+            toast.success(`${analysisType} completed!`)
             return 100
           }
           
           // Update current stage based on progress
-          const currentProgress = Math.min(100, prev + (realTimeData ? 3 : 2)) // Cap at 100%
+          const currentProgress = Math.min(100, prev + ((realTimeData || bloodAnalysisData) ? 3 : 2))
           if (currentProgress < 15) setCurrentStage('preprocessing')
           else if (currentProgress < 40) setCurrentStage('tiling')
           else if (currentProgress < 70) setCurrentStage('feature_extraction')
@@ -264,11 +309,11 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
           
           return currentProgress
         })
-      }, realTimeData ? 80 : 100) // Faster processing for real data
+      }, (realTimeData || bloodAnalysisData) ? 80 : 100)
 
       return () => clearInterval(interval)
     }
-  }, [isAnalyzing, realTimeData])
+  }, [isAnalyzing, realTimeData, bloodAnalysisData, imageType])
 
   const getRiskColor = (risk) => {
     switch (risk) {
@@ -286,16 +331,19 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
           <h1 className="text-3xl font-bold">AI Analysis Dashboard</h1>
           <p className="text-muted-foreground">
             Step 3: AI-powered pathology analysis and prediction
-            {realTimeData && realTimeData.patientInfo.name && (
-              <span className="ml-2 text-primary">• Patient: {realTimeData.patientInfo.name}</span>
+            {(realTimeData?.patientInfo?.name || bloodAnalysisData?.patientInfo?.name) && (
+              <span className="ml-2 text-primary">• Patient: {realTimeData?.patientInfo?.name || bloodAnalysisData?.patientInfo?.name}</span>
             )}
+            <span className="ml-2 text-xs bg-primary/10 px-2 py-1 rounded">
+              {imageType === 'blood' ? '🩸 Blood Smear Analysis' : '🔬 Tissue Analysis'}
+            </span>
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {realTimeData && (
+          {(realTimeData || bloodAnalysisData) && (
             <Badge variant="secondary" className="text-sm">
               <Target className="h-4 w-4 mr-2" />
-              {realTimeData.analyzedImages}/{realTimeData.totalImages} Images
+              {(realTimeData?.analyzedImages || bloodAnalysisData?.analyzedImages)}/{(realTimeData?.totalImages || bloodAnalysisData?.totalImages)} Images
             </Badge>
           )}
           <Badge variant="outline" className="text-sm">
@@ -305,24 +353,72 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
         </div>
       </div>
 
-      {/* Show message when no real data available */}
-      {!realTimeData && !isAnalyzing && (
-        <Card className="border-2 border-yellow-200 bg-yellow-50">
-          <CardContent className="p-8 text-center">
-            <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
-            <h3 className="text-lg font-semibold mb-2">No Analysis Data Available</h3>
-            <p className="text-muted-foreground mb-4">
-              Please upload and analyze images in the WSI Viewer to see ML-powered results here.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              The AI dashboard will display real-time analysis once images are processed with the ML model.
-            </p>
-          </CardContent>
-        </Card>
+      {/* Blood Analysis Summary Cards - Only show for blood samples */}
+      {imageType === 'blood' && bloodAnalysisData && !isAnalyzing && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card className={`border-2 ${bloodAnalysisData.malaria.detected ? 'border-red-200 bg-red-50/50' : 'border-green-200 bg-green-50/50'}`}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Malaria Detection</p>
+                  <p className={`text-2xl font-bold ${bloodAnalysisData.malaria.detected ? 'text-red-600' : 'text-green-600'}`}>
+                    {bloodAnalysisData.malaria.detected ? 'PARASITIZED' : 'UNINFECTED'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {bloodAnalysisData.malaria.parasitizedCount} of {bloodAnalysisData.analyzedImages} images
+                  </p>
+                </div>
+                {bloodAnalysisData.malaria.detected ? 
+                  <AlertTriangle className="h-8 w-8 text-red-600" /> : 
+                  <CheckCircle2 className="h-8 w-8 text-green-600" />
+                }
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Platelets Count</p>
+                  <p className="text-2xl font-bold text-purple-600">{bloodAnalysisData.cellCount.platelets}</p>
+                  <p className="text-xs text-muted-foreground">cells detected</p>
+                </div>
+                <Activity className="h-8 w-8 text-purple-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">RBC Count</p>
+                  <p className="text-2xl font-bold text-red-500">{bloodAnalysisData.cellCount.rbc}</p>
+                  <p className="text-xs text-muted-foreground">red blood cells</p>
+                </div>
+                <Target className="h-8 w-8 text-red-500" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">WBC Count</p>
+                  <p className="text-2xl font-bold text-blue-600">{bloodAnalysisData.cellCount.wbc}</p>
+                  <p className="text-xs text-muted-foreground">white blood cells</p>
+                </div>
+                <TrendingUp className="h-8 w-8 text-blue-600" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
-      {/* Real-time Data Summary */}
-        {realTimeData && !isAnalyzing && (
+      {/* Tissue Analysis Summary Cards */}
+      {imageType === 'tissue' && realTimeData && !isAnalyzing && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             
             <Card className="border-2 border-red-200 bg-red-50/50">
@@ -382,8 +478,8 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
           </div>
         )}
 
-        {/* Tumor Percentage Detailed Analysis */}
-      {realTimeData && !isAnalyzing && (
+        {/* Tumor Percentage Detailed Analysis - Only for Tissue */}
+      {imageType === 'tissue' && realTimeData && !isAnalyzing && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Tumor Distribution Chart */}
           <Card>
@@ -498,6 +594,115 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
         </div>
       )}
 
+      {/* Blood Analysis Detailed Cards */}
+      {imageType === 'blood' && bloodAnalysisData && !isAnalyzing && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Malaria Detection Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                Malaria Detection Analysis
+              </CardTitle>
+              <CardDescription>
+                AI-powered parasite detection in blood smear
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {/* Large Status Display */}
+                <div className={`text-center p-6 rounded-lg border-2 ${
+                  bloodAnalysisData.malaria.detected 
+                    ? 'bg-gradient-to-br from-red-50 to-orange-50 border-red-200' 
+                    : 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-200'
+                }`}>
+                  <div className={`text-4xl font-bold mb-2 ${
+                    bloodAnalysisData.malaria.detected ? 'text-red-600' : 'text-green-600'
+                  }`}>
+                    {bloodAnalysisData.malaria.status}
+                  </div>
+                  <div className={`text-lg font-medium ${
+                    bloodAnalysisData.malaria.detected ? 'text-red-700' : 'text-green-700'
+                  }`}>
+                    {bloodAnalysisData.malaria.detected ? 'Malaria Parasite Detected' : 'No Malaria Parasite Found'}
+                  </div>
+                  <div className="text-sm mt-2 text-muted-foreground">
+                    Confidence: {(bloodAnalysisData.malaria.avgConfidence * 100).toFixed(1)}%
+                  </div>
+                </div>
+
+                {/* Detection Stats */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-gray-50 rounded-lg border">
+                    <div className="text-sm font-medium text-muted-foreground">Parasitized Samples</div>
+                    <div className="text-2xl font-bold text-red-600">
+                      {bloodAnalysisData.malaria.parasitizedCount}
+                    </div>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded-lg border">
+                    <div className="text-sm font-medium text-muted-foreground">Clean Samples</div>
+                    <div className="text-2xl font-bold text-green-600">
+                      {bloodAnalysisData.analyzedImages - bloodAnalysisData.malaria.parasitizedCount}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Cell Count Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                Blood Cell Count Analysis
+              </CardTitle>
+              <CardDescription>
+                YOLOv8-powered cell detection and counting
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {/* Total Cells */}
+                <div className="text-center p-4 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg border-2 border-blue-200">
+                  <div className="text-4xl font-bold text-blue-600 mb-1">
+                    {bloodAnalysisData.cellCount.totalCells}
+                  </div>
+                  <div className="text-sm font-medium text-blue-700">Total Cells Detected</div>
+                </div>
+
+                {/* Cell Type Breakdown */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 bg-red-100 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-4 h-4 rounded-full bg-red-500"></div>
+                      <span className="font-medium">Red Blood Cells (RBC)</span>
+                    </div>
+                    <div className="font-bold text-red-600">{bloodAnalysisData.cellCount.rbc}</div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between p-3 bg-blue-100 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-4 h-4 rounded-full bg-blue-600"></div>
+                      <span className="font-medium">White Blood Cells (WBC)</span>
+                    </div>
+                    <div className="font-bold text-blue-600">{bloodAnalysisData.cellCount.wbc}</div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between p-3 bg-purple-100 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-4 h-4 rounded-full bg-purple-600"></div>
+                      <span className="font-medium">Platelets</span>
+                    </div>
+                    <div className="font-bold text-purple-600">{bloodAnalysisData.cellCount.platelets}</div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Analysis Progress */}
       {isAnalyzing && (
         <Card>
@@ -551,132 +756,202 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
         </Card>
       )}
 
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="blood-analysis">Blood Analysis</TabsTrigger>
-          <TabsTrigger value="tissue-analysis">Tissue Analysis</TabsTrigger>
-          <TabsTrigger value="heatmaps">
-            <Thermometer className="h-4 w-4 mr-2" />
-            Auto Heatmaps
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="blood-analysis" className={imageType === 'blood' ? 'bg-red-100' : ''}>
+            🩸 Blood Smear Analysis
+          </TabsTrigger>
+          <TabsTrigger value="tissue-analysis" className={imageType === 'tissue' ? 'bg-blue-100' : ''}>
+            🔬 Tissue Analysis
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <TabsContent value="blood-analysis" className="space-y-6">
+          {imageType !== 'blood' ? (
             <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-2xl font-bold">
-                      {results ? results.accuracy.toFixed(1) : isAnalyzing ? analysisProgress.toFixed(1) : realTimeData ? (realTimeData.averageConfidence * 100).toFixed(1) : '--'}%
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {isAnalyzing ? 'Progress' : 'Model Confidence'}
-                    </p>
-                  </div>
-                  <Target className="h-8 w-8 text-muted-foreground" />
-                </div>
+              <CardContent className="p-8 text-center">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                <h3 className="text-lg font-semibold mb-2">Blood Analysis Not Applicable</h3>
+                <p className="text-muted-foreground">
+                  This analysis is only available for blood smear images. 
+                  The current sample is a tissue sample for tumor detection.
+                </p>
               </CardContent>
             </Card>
-
+          ) : !bloodAnalysisData ? (
             <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-2xl font-bold">
-                      {results ? results.processingTime : isAnalyzing ? 'Processing...' : realTimeData ? `${realTimeData.analyzedImages * 0.3}s` : '--'}
-                    </p>
-                    <p className="text-sm text-muted-foreground">Processing Time</p>
-                  </div>
-                  <Zap className="h-8 w-8 text-muted-foreground" />
-                </div>
+              <CardContent className="p-8 text-center">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
+                <h3 className="text-lg font-semibold mb-2">No Blood Analysis Data</h3>
+                <p className="text-muted-foreground">
+                  Blood smear analysis results will appear here after uploading and analyzing blood smear images.
+                  Select "Blood Smear Image" in Step 1 to run malaria detection and platelet counting.
+                </p>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-2xl font-bold">
-                      {results ? results.anomaliesDetected : isAnalyzing ? '...' : realTimeData ? realTimeData.tumorCount : '0'}
-                    </p>
-                    <p className="text-sm text-muted-foreground">Tumors Detected</p>
-                  </div>
-                  <AlertTriangle className="h-8 w-8 text-muted-foreground" />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-2xl font-bold">{realTimeData ? realTimeData.analyzedImages : '0'}</p>
-                    <p className="text-sm text-muted-foreground">Images Analyzed</p>
-                  </div>
-                  <BarChart3 className="h-8 w-8 text-muted-foreground" />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {!isAnalyzing && realTimeData && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          ) : (
+            <div className="space-y-6">
+              {/* Malaria Detection Section */}
               <Card>
                 <CardHeader>
-                  <CardTitle>AI Model Confidence</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5" />
+                    Malaria Parasite Detection
+                  </CardTitle>
                   <CardDescription>
-                    Confidence levels across different analysis categories
+                    InceptionV3-powered malaria detection in blood smear samples
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ChartContainer
-                    config={{
-                      confidence: {
-                        label: "Confidence",
-                        color: "hsl(var(--chart-1))",
-                      }
-                    }}
-                    className="h-[300px]"
-                  >
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={confidenceData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis 
-                          dataKey="category" 
-                          fontSize={12}
-                          angle={-45}
-                          textAnchor="end"
-                          height={80}
-                        />
-                        <YAxis />
-                        <ChartTooltip content={<ChartTooltipContent />} />
-                        <Bar dataKey="confidence" fill="var(--color-confidence)" radius={4} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </ChartContainer>
+                  {isAnalyzing ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-32 w-full" />
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <Alert className={bloodAnalysisData.malaria.detected ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}>
+                        {bloodAnalysisData.malaria.detected ? (
+                          <>
+                            <AlertTriangle className="h-4 w-4 text-red-600" />
+                            <AlertTitle className="text-red-600">Malaria Parasite Detected!</AlertTitle>
+                            <AlertDescription>
+                              {bloodAnalysisData.malaria.parasitizedCount} sample(s) show signs of parasitic infection. 
+                              Immediate medical attention recommended.
+                            </AlertDescription>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                            <AlertTitle className="text-green-600">No Malaria Detected</AlertTitle>
+                            <AlertDescription>
+                              All {bloodAnalysisData.analyzedImages} blood smear samples appear clear of malaria parasites.
+                            </AlertDescription>
+                          </>
+                        )}
+                      </Alert>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <Card>
+                          <CardContent className="p-4 text-center">
+                            <div className={`text-2xl font-bold ${bloodAnalysisData.malaria.detected ? 'text-red-600' : 'text-green-600'}`}>
+                              {bloodAnalysisData.malaria.status}
+                            </div>
+                            <div className="text-sm text-muted-foreground">Detection Status</div>
+                          </CardContent>
+                        </Card>
+                        <Card>
+                          <CardContent className="p-4 text-center">
+                            <div className="text-2xl font-bold">{(bloodAnalysisData.malaria.avgConfidence * 100).toFixed(1)}%</div>
+                            <div className="text-sm text-muted-foreground">Model Confidence</div>
+                          </CardContent>
+                        </Card>
+                        <Card>
+                          <CardContent className="p-4 text-center">
+                            <div className="text-2xl font-bold">{bloodAnalysisData.analyzedImages}</div>
+                            <div className="text-sm text-muted-foreground">Images Analyzed</div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Cell Count Section */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-5 w-5" />
+                    Blood Cell Count Results
+                  </CardTitle>
+                  <CardDescription>
+                    YOLOv8-powered automated cell detection and counting
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {isAnalyzing ? (
+                    <Skeleton className="h-48 w-full" />
+                  ) : (
+                    <div className="space-y-4">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Cell Type</TableHead>
+                            <TableHead className="text-right">Count</TableHead>
+                            <TableHead className="text-right">Percentage</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow>
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-red-500" />
+                                Red Blood Cells (RBC)
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-red-600">{bloodAnalysisData.cellCount.rbc}</TableCell>
+                            <TableCell className="text-right">
+                              {bloodAnalysisData.cellCount.totalCells > 0 
+                                ? ((bloodAnalysisData.cellCount.rbc / bloodAnalysisData.cellCount.totalCells) * 100).toFixed(1) 
+                                : 0}%
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-blue-600" />
+                                White Blood Cells (WBC)
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-blue-600">{bloodAnalysisData.cellCount.wbc}</TableCell>
+                            <TableCell className="text-right">
+                              {bloodAnalysisData.cellCount.totalCells > 0 
+                                ? ((bloodAnalysisData.cellCount.wbc / bloodAnalysisData.cellCount.totalCells) * 100).toFixed(1) 
+                                : 0}%
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-purple-600" />
+                                Platelets
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-purple-600">{bloodAnalysisData.cellCount.platelets}</TableCell>
+                            <TableCell className="text-right">
+                              {bloodAnalysisData.cellCount.totalCells > 0 
+                                ? ((bloodAnalysisData.cellCount.platelets / bloodAnalysisData.cellCount.totalCells) * 100).toFixed(1) 
+                                : 0}%
+                            </TableCell>
+                          </TableRow>
+                          <TableRow className="bg-gray-50">
+                            <TableCell className="font-bold">Total Cells</TableCell>
+                            <TableCell className="text-right font-bold">{bloodAnalysisData.cellCount.totalCells}</TableCell>
+                            <TableCell className="text-right font-bold">100%</TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
           )}
         </TabsContent>
 
-        <TabsContent value="blood-analysis" className="space-y-6">
-          <Card>
-            <CardContent className="p-8 text-center">
-              <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
-              <h3 className="text-lg font-semibold mb-2">Blood Analysis Not Available</h3>
-              <p className="text-muted-foreground">
-                The current model (ResNet50) is trained for tumor detection in tissue samples only.
-                Blood cell analysis requires a different model (e.g., EfficientNet for blood cells).
-              </p>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
         <TabsContent value="tissue-analysis" className="space-y-6">
-          {!realTimeData ? (
+          {imageType !== 'tissue' ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                <h3 className="text-lg font-semibold mb-2">Tissue Analysis Not Applicable</h3>
+                <p className="text-muted-foreground">
+                  This analysis is only available for tissue/histopathology images. 
+                  The current sample is a blood smear for malaria and cell counting.
+                </p>
+              </CardContent>
+            </Card>
+          ) : !realTimeData ? (
             <Card>
               <CardContent className="p-8 text-center">
                 <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-yellow-600" />
@@ -754,81 +1029,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
           </Card>
           )}
         </TabsContent>
-
-        <TabsContent value="heatmaps" className="space-y-6">
-          <BasicHeatmapTest />
-          <SimpleHeatmapDisplay />
-        </TabsContent>
       </Tabs>
-
-      {/* Detected Features Section */}
-      {realTimeData && !isAnalyzing && realTimeData.detectedFeatures.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="h-5 w-5" />
-              Detected Features
-            </CardTitle>
-            <CardDescription>
-              Key pathological features identified by AI analysis
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {realTimeData.detectedFeatures.map((feature, index) => (
-                <Card key={index} className="border-2">
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-sm">{feature}</p>
-                        <p className="text-xs text-muted-foreground">
-                          Confidence: {((realTimeData.averageConfidence + Math.random() * 0.1) * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                      <Badge variant={
-                        feature.toLowerCase().includes('abnormal') || feature.toLowerCase().includes('irregular') ? 
-                        'destructive' : 'secondary'
-                      }>
-                        Detected
-                      </Badge>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-            
-            {realTimeData.analyses.length > 0 && (
-              <div className="mt-6">
-                <h4 className="font-semibold mb-3">Per-Image Analysis Results</h4>
-                <div className="space-y-2">
-                  {realTimeData.analyses.map((analysis, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${
-                          analysis.prediction === 'malignant' ? 'bg-red-500' : 'bg-green-500'
-                        }`} />
-                        <span className="font-medium">Image {index + 1}</span>
-                        <Badge variant="outline">{analysis.metadata?.prediction?.predicted_class || analysis.prediction}</Badge>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-muted-foreground">
-                          {(analysis.confidence * 100).toFixed(1)}% confidence
-                        </span>
-                        <Badge className={getRiskColor(
-                          (analysis.riskAssessment || 'medium').toLowerCase() === 'high' ? 'high' :
-                          (analysis.riskAssessment || 'medium').toLowerCase() === 'medium' ? 'medium' : 'low'
-                        )}>
-                          {analysis.riskAssessment || 'medium'}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* Action Button */}
       <div className="flex justify-end">
