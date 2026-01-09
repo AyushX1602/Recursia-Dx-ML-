@@ -670,15 +670,15 @@ def get_model_info():
 
 @app.route('/generate_heatmap', methods=['POST'])
 def generate_heatmap():
-    """Generate real heatmap from image using the pipeline."""
-    global pipeline, predictor
+    """Generate real heatmap from image using patch-based prediction."""
+    global tumor_predictor
     
     try:
-        # Check if pipeline is loaded
-        if pipeline is None or predictor is None:
+        # Check if model is loaded
+        if tumor_predictor is None or tumor_predictor.model is None:
             return jsonify({
                 'success': False,
-                'error': 'ML model or pipeline not available'
+                'error': 'Tumor detection model not available'
             }), 503
         
         # Check if image file is present
@@ -709,57 +709,90 @@ def generate_heatmap():
         filepath = os.path.join(config.UPLOADS_DIR, filename)
         file.save(filepath)
         
+        # Also save heatmap output
+        heatmap_filename = f"heatmap_{filename}"
+        heatmap_filepath = os.path.join(config.UPLOADS_DIR, heatmap_filename)
+        
         logger.info(f"Generating heatmap for: {filename}")
         start_time = time.time()
         
         try:
-            # Load image to get basic prediction
+            # Load image
             image = Image.open(filepath)
             image_array = np.array(image.convert('RGB'))
+            img_height, img_width = image_array.shape[:2]
             
-            # Get basic prediction
-            prediction_result = predictor.predict(image_array)
+            # Get overall prediction first
+            prediction_result = tumor_predictor.predict(image_array)
             
-            # Generate real heatmap using simplified approach
-            # For larger images, we'll use patch-based analysis
-            img_width, img_height = image.size
+            # Create heatmap using patch-based prediction
+            patch_size = 112  # Smaller patches for more detail
+            stride = 56  # 50% overlap for smoother heatmap
             
-            # Initialize heatmap generator
-            heatmap_gen = HeatmapGenerator(
-                image_size=(img_width, img_height),
-                patch_size=224,
-                aggregation_method='weighted_average',
-                smoothing_sigma=3.0
-            )
+            # Initialize probability map
+            prob_map = np.zeros((img_height, img_width), dtype=np.float32)
+            count_map = np.zeros((img_height, img_width), dtype=np.float32)
             
-            # Process in patches for detailed heatmap
-            patch_size = 224
-            stride = int(patch_size * 0.75)  # 25% overlap
-            
+            # Process patches
             for y in range(0, img_height - patch_size + 1, stride):
                 for x in range(0, img_width - patch_size + 1, stride):
                     # Extract patch
                     patch = image_array[y:y+patch_size, x:x+patch_size]
                     
-                    # Predict on patch
-                    patch_pred = predictor.predict(patch)
+                    # Resize patch to model input size if needed
+                    patch_resized = np.array(Image.fromarray(patch).resize((224, 224)))
                     
-                    # Add to heatmap
-                    heatmap_gen.add_patch_prediction(
-                        x, y,
-                        patch_pred['probabilities']['tumor'],
-                        patch_pred['confidence'] * 100
-                    )
+                    # Predict on patch
+                    try:
+                        patch_pred = tumor_predictor.predict(patch_resized)
+                        tumor_prob = patch_pred.get('probabilities', {}).get('tumor', 0.5)
+                        if hasattr(tumor_prob, 'item'):
+                            tumor_prob = tumor_prob.item()
+                    except Exception as patch_err:
+                        logger.warning(f"Patch prediction failed: {patch_err}")
+                        tumor_prob = 0.5
+                    
+                    # Add to probability map with Gaussian weighting
+                    prob_map[y:y+patch_size, x:x+patch_size] += tumor_prob
+                    count_map[y:y+patch_size, x:x+patch_size] += 1
             
-            # Generate heatmap
-            heatmap = heatmap_gen.generate_heatmap(apply_smoothing=True)
+            # Avoid division by zero
+            count_map[count_map == 0] = 1
+            prob_map = prob_map / count_map
             
-            # Apply colormap and create overlay
-            colored_heatmap = heatmap_gen.apply_colormap(heatmap)
+            # Apply Gaussian smoothing
+            try:
+                from scipy.ndimage import gaussian_filter
+                prob_map = gaussian_filter(prob_map, sigma=5)
+            except ImportError:
+                pass  # Skip smoothing if scipy not available
             
-            # Convert to base64
-            heatmap_pil = Image.fromarray(colored_heatmap)
-            buffer = BytesIO()
+            # Normalize to 0-255 for colormap
+            prob_map_normalized = (prob_map * 255).astype(np.uint8)
+            
+            # Apply colormap (blue=low, red=high)
+            try:
+                import cv2
+                colored_heatmap = cv2.applyColorMap(prob_map_normalized, cv2.COLORMAP_JET)
+                colored_heatmap = cv2.cvtColor(colored_heatmap, cv2.COLOR_BGR2RGB)
+            except ImportError:
+                # Fallback: simple red-blue colormap
+                colored_heatmap = np.zeros((img_height, img_width, 3), dtype=np.uint8)
+                colored_heatmap[:, :, 0] = prob_map_normalized  # Red channel
+                colored_heatmap[:, :, 2] = 255 - prob_map_normalized  # Blue channel
+            
+            # Create overlay
+            alpha = 0.5
+            overlay = (image_array * (1 - alpha) + colored_heatmap * alpha).astype(np.uint8)
+            
+            # Save heatmap overlay
+            heatmap_pil = Image.fromarray(overlay)
+            heatmap_pil.save(heatmap_filepath, 'PNG')
+            
+            # Also create base64 version
+            import io
+            import base64
+            buffer = io.BytesIO()
             heatmap_pil.save(buffer, format='PNG')
             heatmap_base64 = base64.b64encode(buffer.getvalue()).decode()
             
@@ -768,16 +801,17 @@ def generate_heatmap():
             # Prepare response
             response_data = {
                 'success': True,
-                'prediction': prediction_result,
+                'prediction': convert_numpy_types(prediction_result),
                 'heatmap': {
+                    'url': f'/uploads/{heatmap_filename}',
                     'base64': f'data:image/png;base64,{heatmap_base64}',
                     'type': 'tumor_probability',
                     'colormap': 'jet',
                     'analytics': {
-                        'min_value': float(heatmap.min()),
-                        'max_value': float(heatmap.max()),
-                        'mean_value': float(heatmap.mean()),
-                        'std_value': float(heatmap.std())
+                        'min_value': float(prob_map.min()),
+                        'max_value': float(prob_map.max()),
+                        'mean_value': float(prob_map.mean()),
+                        'std_value': float(prob_map.std())
                     }
                 },
                 'processing_time': round(processing_time, 3),
@@ -786,21 +820,20 @@ def generate_heatmap():
             
             logger.info(f"Heatmap generated in {processing_time:.3f}s")
             
-            # Convert NumPy types
-            response_data = convert_numpy_types(response_data)
-            
             return jsonify(response_data)
             
         except Exception as e:
             logger.error(f"Heatmap generation failed: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return jsonify({
                 'success': False,
                 'error': 'Heatmap generation failed',
-                'details': str(e) if app.debug else None
+                'details': str(e)
             }), 500
             
         finally:
-            # Clean up uploaded file
+            # Clean up original uploaded file (keep heatmap)
             try:
                 if os.path.exists(filepath):
                     os.remove(filepath)
@@ -812,7 +845,7 @@ def generate_heatmap():
         return jsonify({
             'success': False,
             'error': ERROR_MESSAGES['unknown_error'],
-            'details': str(e) if app.debug else None
+            'details': str(e)
         }), 500
 
 if __name__ == '__main__':

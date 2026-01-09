@@ -21,7 +21,7 @@ class MLService {
       }
 
       const result = await response.json();
-      
+
       if (!result.success) {
         throw new Error(result.error || 'ML prediction failed');
       }
@@ -44,10 +44,10 @@ class MLService {
   static async batchPredict(imagePaths, imageType = 'tissue') {
     try {
       const formData = new FormData();
-      
+
       // Add imageType to form data for ML API routing
       formData.append('imageType', imageType);
-      
+
       imagePaths.forEach(({ path, filename }) => {
         formData.append('images', fs.createReadStream(path), filename);
       });
@@ -63,7 +63,7 @@ class MLService {
       }
 
       const result = await response.json();
-      
+
       if (!result.success) {
         throw new Error(result.error || 'Batch ML prediction failed');
       }
@@ -132,6 +132,43 @@ class MLService {
       return {
         success: false,
         error: error.message
+      };
+    }
+  }
+
+  static async generateHeatmap(imagePath, filename) {
+    try {
+      const formData = new FormData();
+      formData.append('image', fs.createReadStream(imagePath), filename);
+
+      const response = await fetch(`${ML_API_URL}/generate_heatmap`, {
+        method: 'POST',
+        body: formData,
+        timeout: 120000 // 2 minute timeout for heatmap generation
+      });
+
+      if (!response.ok) {
+        throw new Error(`Heatmap generation failed: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      if (!result.success) {
+        throw new Error(result.error || 'Heatmap generation failed');
+      }
+
+      return {
+        success: true,
+        heatmap: result.heatmap,
+        prediction: result.prediction,
+        processingTime: result.processing_time
+      };
+    } catch (error) {
+      console.error('Heatmap generation error:', error);
+      return {
+        success: false,
+        error: error.message,
+        heatmap: null
       };
     }
   }

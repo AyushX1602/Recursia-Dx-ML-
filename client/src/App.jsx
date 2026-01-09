@@ -121,21 +121,18 @@ const AppContent = () => {
           }}
         />
       case 'viewer':
-        console.log('🔍 App: Passing sample to WSI viewer:', currentSample)
+        console.log('🔍 App: Passing sample to Image Preview:', currentSample)
         return <WSIViewer 
           onNext={() => setActiveTab('analysis')} 
           sample={currentSample}
           onSampleUpdated={(updatedSample) => {
-            console.log('🔬 App: Sample updated from WSI viewer:', updatedSample)
+            console.log('🔬 App: Sample updated from Image Preview:', updatedSample)
             setCurrentSample(updatedSample)
           }}
         />
       case 'analysis':
-      case 'analysis-blood':
-      case 'analysis-tissue':
         return <AnalysisDashboard 
           onNext={() => setActiveTab('review')} 
-          analysisType={activeTab.includes('blood') ? 'blood' : activeTab.includes('tissue') ? 'tissue' : 'general'}
           sample={currentSample}
         />
       case 'review':
@@ -144,10 +141,7 @@ const AppContent = () => {
           sample={currentSample}
         />
       case 'report':
-      case 'report-patient':
-      case 'report-lab':
         return <ReportGeneration 
-          reportType={activeTab.includes('patient') ? 'patient' : activeTab.includes('lab') ? 'lab' : 'general'}
           sample={currentSample}
         />
       default:

@@ -334,9 +334,6 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
             {(realTimeData?.patientInfo?.name || bloodAnalysisData?.patientInfo?.name) && (
               <span className="ml-2 text-primary">• Patient: {realTimeData?.patientInfo?.name || bloodAnalysisData?.patientInfo?.name}</span>
             )}
-            <span className="ml-2 text-xs bg-primary/10 px-2 py-1 rounded">
-              {imageType === 'blood' ? '🩸 Blood Smear Analysis' : '🔬 Tissue Analysis'}
-            </span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -592,6 +589,115 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* Heatmap Visualization Section - Only for Tissue Samples */}
+      {imageType === 'tissue' && realTimeData && !isAnalyzing && sample?.images && (
+        <Card className="border-2 border-orange-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-5 w-5 text-orange-600" />
+              Tumor Heatmap Visualization
+            </CardTitle>
+            <CardDescription>
+              AI-generated heatmap showing tumor probability regions (red = high probability, blue = low probability)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {sample.images.map((image, index) => (
+                <div key={index} className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-sm">Image {index + 1}</h4>
+                    <Badge variant={image.mlAnalysis?.prediction === 'Tumor' ? 'destructive' : 'secondary'}>
+                      {image.mlAnalysis?.prediction || 'Analyzed'}
+                    </Badge>
+                  </div>
+                  
+                  {/* Original Image */}
+                  <div className="relative rounded-lg overflow-hidden border">
+                    <img 
+                      src={`http://localhost:5001${image.url}`}
+                      alt={`Sample ${index + 1}`}
+                      className="w-full h-48 object-cover"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                    <div className="hidden items-center justify-center h-48 bg-muted text-muted-foreground text-sm">
+                      Image not available
+                    </div>
+                  </div>
+
+                  {/* Heatmap Overlay */}
+                  {image.heatmap?.url ? (
+                    <div className="relative rounded-lg overflow-hidden border-2 border-orange-300">
+                      <div className="absolute top-2 left-2 z-10">
+                        <Badge className="bg-orange-600">Heatmap</Badge>
+                      </div>
+                      <img 
+                        src={`http://localhost:5001${image.heatmap.url}`}
+                        alt={`Heatmap ${index + 1}`}
+                        className="w-full h-48 object-cover"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                      <div className="hidden items-center justify-center h-48 bg-gradient-to-br from-blue-100 to-red-100 text-muted-foreground text-sm">
+                        Heatmap loading...
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border-2 border-dashed border-orange-300 h-48 flex flex-col items-center justify-center bg-orange-50/50">
+                      <Activity className="h-8 w-8 text-orange-400 mb-2" />
+                      <p className="text-sm text-orange-600 font-medium">Heatmap Generating...</p>
+                      <p className="text-xs text-muted-foreground">Auto-generated after analysis</p>
+                    </div>
+                  )}
+
+                  {/* Tumor Probability Bar */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-24">Tumor Prob:</span>
+                    <div className="flex-1 bg-gray-200 rounded-full h-2">
+                      <div 
+                        className={`h-2 rounded-full ${
+                          (image.mlAnalysis?.metadata?.probabilities?.tumor || 0) > 0.5 
+                            ? 'bg-red-500' 
+                            : 'bg-green-500'
+                        }`}
+                        style={{ width: `${(image.mlAnalysis?.metadata?.probabilities?.tumor || 0) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-bold w-12 text-right">
+                      {((image.mlAnalysis?.metadata?.probabilities?.tumor || 0) * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Color Legend */}
+            <div className="mt-6 p-4 bg-muted/50 rounded-lg">
+              <h5 className="text-sm font-medium mb-2">Heatmap Legend</h5>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded bg-gradient-to-r from-blue-500 to-blue-400"></div>
+                  <span className="text-xs">Low Risk (0-30%)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded bg-gradient-to-r from-yellow-500 to-orange-400"></div>
+                  <span className="text-xs">Medium Risk (30-60%)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded bg-gradient-to-r from-red-500 to-red-600"></div>
+                  <span className="text-xs">High Risk (60-100%)</span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Blood Analysis Detailed Cards */}

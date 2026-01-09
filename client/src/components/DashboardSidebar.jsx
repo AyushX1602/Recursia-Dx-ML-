@@ -25,19 +25,15 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
     },
     {
       id: 'viewer',
-      title: 'WSI Viewer',
+      title: 'Image Preview',
       icon: 'Microscope',
-      description: 'View and analyze whole slide images'
+      description: 'View and inspect uploaded images'
     },
     {
       id: 'analysis',
       title: 'AI Analysis',
       icon: 'Brain',
-      description: 'AI-powered pathology analysis',
-      submenu: [
-        { title: "Blood Analysis", id: "analysis-blood", icon: "Droplets" },
-        { title: "Tissue Analysis", id: "analysis-tissue", icon: "ScanEye" },
-      ]
+      description: 'AI-powered pathology analysis'
     },
     {
       id: 'review',
@@ -49,11 +45,7 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
       id: 'report',
       title: 'Generate Report',
       icon: 'FileText',
-      description: 'Create professional pathology reports',
-      submenu: [
-        { title: "Patient Report", id: "report-patient", icon: "User" },
-        { title: "Lab Report", id: "report-lab", icon: "Building2" },
-      ]
+      description: 'Create professional pathology reports'
     }
   ]
 

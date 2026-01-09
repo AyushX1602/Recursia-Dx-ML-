@@ -1,10 +1,39 @@
 // API configuration and utility functions
 const API_BASE_URL = 'http://localhost:5001/api';
 
+// Cookie expiry time (1 hour in seconds)
+const COOKIE_EXPIRY_SECONDS = 60 * 60; // 1 hour
+
+// Cookie utility functions
+const cookieUtils = {
+  // Set a cookie with expiry
+  setCookie: (name, value, maxAgeSeconds = COOKIE_EXPIRY_SECONDS) => {
+    const expires = new Date(Date.now() + maxAgeSeconds * 1000).toUTCString();
+    document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Strict`;
+  },
+
+  // Get a cookie value by name
+  getCookie: (name) => {
+    const cookies = document.cookie.split(';');
+    for (let cookie of cookies) {
+      const [cookieName, cookieValue] = cookie.trim().split('=');
+      if (cookieName === name) {
+        return decodeURIComponent(cookieValue);
+      }
+    }
+    return null;
+  },
+
+  // Delete a cookie
+  deleteCookie: (name) => {
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict`;
+  }
+};
+
 // API response handler
 const handleApiResponse = async (response) => {
   const data = await response.json();
-  
+
   if (!response.ok) {
     throw {
       status: response.status,
@@ -12,22 +41,24 @@ const handleApiResponse = async (response) => {
       errors: data.errors || null
     };
   }
-  
+
   return data;
 };
 
 // Generic API request function
 const apiRequest = async (endpoint, options = {}) => {
   const url = `${API_BASE_URL}${endpoint}`;
-  
+
   const defaultOptions = {
     headers: {
       'Content-Type': 'application/json',
     },
   };
 
-  // Add authentication token if available
-  const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+  // Check cookies first, then localStorage/sessionStorage
+  const token = cookieUtils.getCookie('authToken') ||
+    localStorage.getItem('authToken') ||
+    sessionStorage.getItem('authToken');
   if (token) {
     defaultOptions.headers['Authorization'] = `Bearer ${token}`;
   }
@@ -66,9 +97,9 @@ export const authAPI = {
       email: userData.email,
       password: userData.password,
       confirmPassword: userData.confirmPassword,
-      role: userData.role === 'technician' ? 'Technician' : 
-            userData.role === 'pathologist' ? 'Pathologist' :
-            userData.role === 'administrator' ? 'Administrator' :
+      role: userData.role === 'technician' ? 'Technician' :
+        userData.role === 'pathologist' ? 'Pathologist' :
+          userData.role === 'administrator' ? 'Administrator' :
             userData.role === 'resident' ? 'Resident' : 'Technician',
       department: userData.department || userData.institution,
       licenseNumber: userData.license,
@@ -89,7 +120,11 @@ export const authAPI = {
     });
 
     if (response.success && response.data.token) {
-      // Store token based on remember me preference
+      // Always set cookie for 1-hour session persistence (survives tab close)
+      cookieUtils.setCookie('authToken', response.data.token, COOKIE_EXPIRY_SECONDS);
+      cookieUtils.setCookie('userData', JSON.stringify(response.data.user), COOKIE_EXPIRY_SECONDS);
+
+      // Also store in localStorage/sessionStorage based on rememberMe preference
       if (rememberMe) {
         localStorage.setItem('authToken', response.data.token);
         localStorage.setItem('userData', JSON.stringify(response.data.user));
@@ -112,7 +147,10 @@ export const authAPI = {
       // Even if logout fails on backend, clear local data
       console.warn('Logout request failed, but clearing local data:', error);
     } finally {
-      // Always clear local storage
+      // Clear cookies
+      cookieUtils.deleteCookie('authToken');
+      cookieUtils.deleteCookie('userData');
+      // Clear local/session storage
       localStorage.removeItem('authToken');
       localStorage.removeItem('userData');
       sessionStorage.removeItem('authToken');
@@ -159,9 +197,9 @@ export const authAPI = {
   resetPassword: async (token, password) => {
     return await apiRequest(`/auth/reset-password/${token}`, {
       method: 'POST',
-      body: JSON.stringify({ 
-        password, 
-        confirmPassword: password 
+      body: JSON.stringify({
+        password,
+        confirmPassword: password
       }),
     });
   },
@@ -179,7 +217,7 @@ export const samplesAPI = {
   // Get all samples
   getSamples: async (params = {}) => {
     const queryParams = new URLSearchParams();
-    
+
     Object.keys(params).forEach(key => {
       if (params[key] !== undefined && params[key] !== '') {
         queryParams.append(key, params[key]);
@@ -188,7 +226,7 @@ export const samplesAPI = {
 
     const queryString = queryParams.toString();
     const endpoint = `/samples${queryString ? `?${queryString}` : ''}`;
-    
+
     return await apiRequest(endpoint, {
       method: 'GET',
     });
@@ -253,7 +291,7 @@ export const samplesAPI = {
     const params = new URLSearchParams();
     if (startDate) params.append('startDate', startDate);
     if (endDate) params.append('endDate', endDate);
-    
+
     return await apiRequest(`/samples/stats/overview?${params.toString()}`, {
       method: 'GET',
     });
@@ -262,25 +300,33 @@ export const samplesAPI = {
 
 // Utility functions
 export const apiUtils = {
-  // Check if user is authenticated
+  // Check if user is authenticated (checks cookies first)
   isAuthenticated: () => {
-    const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+    const token = cookieUtils.getCookie('authToken') ||
+      localStorage.getItem('authToken') ||
+      sessionStorage.getItem('authToken');
     return !!token;
   },
 
-  // Get stored user data
+  // Get stored user data (checks cookies first)
   getStoredUserData: () => {
-    const userData = localStorage.getItem('userData') || sessionStorage.getItem('userData');
+    const userData = cookieUtils.getCookie('userData') ||
+      localStorage.getItem('userData') ||
+      sessionStorage.getItem('userData');
     return userData ? JSON.parse(userData) : null;
   },
 
-  // Get stored auth token
+  // Get stored auth token (checks cookies first)
   getAuthToken: () => {
-    return localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+    return cookieUtils.getCookie('authToken') ||
+      localStorage.getItem('authToken') ||
+      sessionStorage.getItem('authToken');
   },
 
-  // Clear all auth data
+  // Clear all auth data (including cookies)
   clearAuthData: () => {
+    cookieUtils.deleteCookie('authToken');
+    cookieUtils.deleteCookie('userData');
     localStorage.removeItem('authToken');
     localStorage.removeItem('userData');
     sessionStorage.removeItem('authToken');

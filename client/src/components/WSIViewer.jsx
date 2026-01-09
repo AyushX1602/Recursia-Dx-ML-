@@ -14,6 +14,7 @@ import {
   Move, 
   RotateCw, 
   Maximize2, 
+  Minimize2,
   Download, 
   Info,
   Eye,
@@ -22,7 +23,9 @@ import {
   Target,
   Upload,
   Plus,
-  X
+  X,
+  Undo2,
+  Redo2
 } from 'lucide-react'
 
 export function WSIViewer({ onNext, sample, onSampleUpdated }) {
@@ -35,9 +38,13 @@ export function WSIViewer({ onNext, sample, onSampleUpdated }) {
   const [uploadedImages, setUploadedImages] = useState([])
   const [isUploading, setIsUploading] = useState(false)
   const [activeTool, setActiveTool] = useState('pan') // 'pan' or 'annotate'
+  const [annotationColor, setAnnotationColor] = useState('red') // 'red', 'black', 'yellow'
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [undoStack, setUndoStack] = useState([]) // Stack for redo
+  const [isFullscreen, setIsFullscreen] = useState(false) // Fullscreen toggle
   const canvasRef = useRef(null)
+  const viewerRef = useRef(null)
   const fileInputRef = useRef(null)
 
   // Debug: Log sample data
@@ -182,23 +189,57 @@ export function WSIViewer({ onNext, sample, onSampleUpdated }) {
     }
   }
 
-  const handleAnnotation = (x, y) => {
+  const handleAnnotation = (e) => {
     if (activeTool !== 'annotate') return
+    
+    // Get the viewer container dimensions
+    const rect = viewerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    
+    // Calculate click position relative to the viewer container
+    const clickX = e.clientX - rect.left
+    const clickY = e.clientY - rect.top
     
     // Convert viewport coordinates to image coordinates
     // Account for the transform (scale and translate)
-    const imageX = (x - position.x) / zoomLevel
-    const imageY = (y - position.y) / zoomLevel
+    const imageX = (clickX / zoomLevel) - position.x
+    const imageY = (clickY / zoomLevel) - position.y
     
     const newAnnotation = {
       id: Date.now(),
       x: imageX,
       y: imageY,
+      color: annotationColor,
       type: 'marker',
       note: `Annotation at ${Math.round(imageX)}, ${Math.round(imageY)}`
     }
     setAnnotations(prev => [...prev, newAnnotation])
-    toast.info("Annotation added")
+    setUndoStack([]) // Clear redo stack when new annotation added
+    toast.info(`${annotationColor.charAt(0).toUpperCase() + annotationColor.slice(1)} annotation added`)
+  }
+
+  // Undo last annotation
+  const handleUndo = () => {
+    if (annotations.length === 0) {
+      toast.error('Nothing to undo')
+      return
+    }
+    const lastAnnotation = annotations[annotations.length - 1]
+    setAnnotations(prev => prev.slice(0, -1))
+    setUndoStack(prev => [...prev, lastAnnotation])
+    toast.info('Annotation undone')
+  }
+
+  // Redo last undone annotation
+  const handleRedo = () => {
+    if (undoStack.length === 0) {
+      toast.error('Nothing to redo')
+      return
+    }
+    const lastUndone = undoStack[undoStack.length - 1]
+    setUndoStack(prev => prev.slice(0, -1))
+    setAnnotations(prev => [...prev, lastUndone])
+    toast.info('Annotation restored')
   }
 
   const handleMouseDown = (e) => {
@@ -586,17 +627,126 @@ export function WSIViewer({ onNext, sample, onSampleUpdated }) {
                         <TooltipContent>Annotation Tool (Click to mark)</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
+
+                    {/* Color Picker for Annotations */}
+                    {activeTool === 'annotate' && (
+                      <>
+                        <div className="h-4 w-px bg-border" />
+                        <div className="flex items-center gap-1">
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button 
+                                  variant={annotationColor === 'red' ? 'default' : 'outline'} 
+                                  size="sm"
+                                  className="w-8 h-8 p-0"
+                                  onClick={() => setAnnotationColor('red')}
+                                >
+                                  <div className="w-4 h-4 rounded-full bg-red-500 border-2 border-white" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Red Marker</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button 
+                                  variant={annotationColor === 'black' ? 'default' : 'outline'} 
+                                  size="sm"
+                                  className="w-8 h-8 p-0"
+                                  onClick={() => setAnnotationColor('black')}
+                                >
+                                  <div className="w-4 h-4 rounded-full bg-black border-2 border-white" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Black Marker</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button 
+                                  variant={annotationColor === 'yellow' ? 'default' : 'outline'} 
+                                  size="sm"
+                                  className="w-8 h-8 p-0"
+                                  onClick={() => setAnnotationColor('yellow')}
+                                >
+                                  <div className="w-4 h-4 rounded-full bg-yellow-400 border-2 border-white" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Yellow Marker</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Undo/Redo Buttons */}
+                    <div className="h-4 w-px bg-border" />
+                    
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={handleUndo}
+                            disabled={annotations.length === 0}
+                          >
+                            <Undo2 className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Undo Annotation</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={handleRedo}
+                            disabled={undoStack.length === 0}
+                          >
+                            <Redo2 className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Redo Annotation</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+
+                    {/* Fullscreen Toggle */}
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => setIsFullscreen(!isFullscreen)}
+                          >
+                            {isFullscreen ? (
+                              <Minimize2 className="h-4 w-4" />
+                            ) : (
+                              <Maximize2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
 
                   {/* Image Viewer Area */}
                   <div 
-                    className={`relative h-96 bg-muted/50 overflow-hidden ${activeTool === 'pan' ? 'cursor-move' : 'cursor-crosshair'}`}
+                    ref={viewerRef}
+                    className={`relative ${isFullscreen ? 'h-[80vh]' : 'h-96'} bg-muted/50 overflow-hidden ${activeTool === 'pan' ? 'cursor-move' : 'cursor-crosshair'} transition-all duration-300`}
                     onClick={(e) => {
                       if (activeTool === 'annotate') {
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        const x = e.clientX - rect.left
-                        const y = e.clientY - rect.top
-                        handleAnnotation(x, y)
+                        handleAnnotation(e)
                       }
                     }}
                     onMouseDown={handleMouseDown}
@@ -654,19 +804,26 @@ export function WSIViewer({ onNext, sample, onSampleUpdated }) {
                           </div>
                         )}
 
-                        {/* Annotations - move with the image */}
-                        {annotations.map((annotation) => (
-                          <div
-                            key={annotation.id}
-                            className="absolute w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-lg pointer-events-none"
-                            style={{
-                              left: `${annotation.x}px`,
-                              top: `${annotation.y}px`,
-                              marginLeft: '-6px',
-                              marginTop: '-6px'
-                            }}
-                          />
-                        ))}
+                        {/* Annotations - positioned relative to image, transforms with it */}
+                        {annotations.map((annotation) => {
+                          const colorClass = annotation.color === 'black' 
+                            ? 'bg-black' 
+                            : annotation.color === 'yellow' 
+                              ? 'bg-yellow-400' 
+                              : 'bg-red-500'
+                          return (
+                            <div
+                              key={annotation.id}
+                              className={`absolute w-4 h-4 ${colorClass} rounded-full border-2 border-white shadow-lg pointer-events-none z-20`}
+                              style={{
+                                left: `${annotation.x}px`,
+                                top: `${annotation.y}px`,
+                                transform: 'translate(-50%, -50%)'
+                              }}
+                            />
+                          )
+                        })}
+
                       </div>
                     )}
                   </div>
