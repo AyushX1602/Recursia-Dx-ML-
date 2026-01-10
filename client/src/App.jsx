@@ -10,6 +10,7 @@ import { WSIViewer } from './components/WSIViewer'
 import { AnalysisDashboard } from './components/AnalysisDashboard'
 import { ResultsReview } from './components/ResultsReview'
 import { ReportGeneration } from './components/ReportGeneration'
+import { Settings } from './components/Settings'
 import { Toaster } from '@/components/ui/sonner'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
@@ -144,6 +145,8 @@ const AppContent = () => {
         return <ReportGeneration 
           sample={currentSample}
         />
+      case 'settings':
+        return <Settings />
       default:
         return <SampleUpload 
           onNext={() => setActiveTab('viewer')} 

@@ -2,17 +2,53 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
 import User from '../models/User.js';
-import { 
-  verifyToken, 
-  checkAccountLockout, 
+import {
+  verifyToken,
+  checkAccountLockout,
   authRateLimit,
-  validateTokenStructure 
+  validateTokenStructure
 } from '../middleware/auth.js';
 import { userValidations } from '../middleware/validation.js';
 import { catchAsync, AppError } from '../middleware/errorHandler.js';
 
 const router = express.Router();
+
+// Create avatars directory if it doesn't exist
+const avatarsDir = path.join(process.cwd(), 'uploads', 'avatars');
+if (!fs.existsSync(avatarsDir)) {
+  fs.mkdirSync(avatarsDir, { recursive: true });
+}
+
+// Configure multer for avatar uploads
+const avatarStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, avatarsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const extension = path.extname(file.originalname);
+    cb(null, `avatar-${req.user._id}-${uniqueSuffix}${extension}`);
+  }
+});
+
+const avatarUpload = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    if (mimetype && extname) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed (JPEG, PNG, GIF, WebP)'));
+    }
+  }
+});
 
 // Generate JWT token
 const generateToken = (userId) => {
@@ -29,23 +65,23 @@ const setTokenCookie = (res, token) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict'
   };
-  
+
   res.cookie('token', token, cookieOptions);
 };
 
 // Register new user
-router.post('/register', 
+router.post('/register',
   authRateLimit(3, 15 * 60 * 1000), // 3 attempts per 15 minutes
   userValidations.register,
   catchAsync(async (req, res, next) => {
-    const { 
-      name, 
-      email, 
-      password, 
-      role, 
-      department, 
+    const {
+      name,
+      email,
+      password,
+      role,
+      department,
       licenseNumber,
-      phone 
+      phone
     } = req.body;
 
     // Check if user already exists
@@ -95,7 +131,7 @@ router.post('/login',
 
     // Check if user exists and get password
     const user = await User.findOne({ email }).select('+password');
-    
+
     if (!user) {
       req.incrementAuthAttempt?.();
       return next(new AppError('Invalid credentials', 401));
@@ -108,7 +144,7 @@ router.post('/login',
 
     // Check password
     const isPasswordValid = await user.matchPassword(password);
-    
+
     if (!isPasswordValid) {
       req.incrementAuthAttempt?.();
       // This will handle failed login attempts and potential account locking
@@ -180,15 +216,34 @@ router.put('/profile',
   verifyToken,
   userValidations.updateProfile,
   catchAsync(async (req, res, next) => {
-    const allowedFields = ['name', 'profile', 'preferences'];
+    // Allow updating these fields
+    const allowedFields = [
+      'name',
+      'department',
+      'licenseNumber',
+      'phone',
+      'institution',
+      'specialization',
+      'avatar',
+      'preferences'
+    ];
     const updates = {};
-    
+
     // Filter allowed fields
     Object.keys(req.body).forEach(key => {
       if (allowedFields.includes(key)) {
         updates[key] = req.body[key];
       }
     });
+
+    // Handle nested preferences update (merge instead of replace)
+    if (req.body.preferences) {
+      const currentUser = await User.findById(req.user._id);
+      updates.preferences = {
+        ...currentUser.preferences?.toObject?.() || currentUser.preferences || {},
+        ...req.body.preferences
+      };
+    }
 
     const user = await User.findByIdAndUpdate(
       req.user._id,
@@ -219,7 +274,7 @@ router.put('/change-password',
 
     // Get user with password
     const user = await User.findById(req.user._id).select('+password');
-    
+
     if (!user) {
       return next(new AppError('User not found', 404));
     }
@@ -254,7 +309,7 @@ router.post('/forgot-password',
   authRateLimit(3, 60 * 60 * 1000), // 3 attempts per hour
   catchAsync(async (req, res, next) => {
     const { email } = req.body;
-    
+
     if (!email) {
       return next(new AppError('Email is required', 400));
     }
@@ -272,7 +327,7 @@ router.post('/forgot-password',
     const resetToken = crypto.randomBytes(32).toString('hex');
     user.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
     user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
-    
+
     await user.save({ validateBeforeSave: false });
 
     // In a real application, you would send an email here
@@ -292,11 +347,11 @@ router.post('/reset-password/:token',
   catchAsync(async (req, res, next) => {
     const { token } = req.params;
     const { password, confirmPassword } = req.body;
-    
+
     if (!password || !confirmPassword) {
       return next(new AppError('Password and confirmation are required', 400));
     }
-    
+
     if (password !== confirmPassword) {
       return next(new AppError('Passwords do not match', 400));
     }
@@ -317,7 +372,7 @@ router.post('/reset-password/:token',
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     user.passwordChangedAt = new Date();
-    
+
     await user.save();
 
     // Generate new token
@@ -378,6 +433,57 @@ router.delete('/deactivate',
       success: true,
       message: 'Account deactivated successfully'
     });
+  })
+);
+
+// Upload avatar
+router.post('/avatar',
+  verifyToken,
+  avatarUpload.single('avatar'),
+  catchAsync(async (req, res, next) => {
+    if (!req.file) {
+      return next(new AppError('No file uploaded', 400));
+    }
+
+    // Delete old avatar if exists
+    const currentUser = await User.findById(req.user._id);
+    if (currentUser.avatar && currentUser.avatar.startsWith('/api/auth/avatar/')) {
+      const oldFilename = currentUser.avatar.split('/').pop();
+      const oldPath = path.join(avatarsDir, oldFilename);
+      if (fs.existsSync(oldPath)) {
+        fs.unlinkSync(oldPath);
+      }
+    }
+
+    // Update user with new avatar URL
+    const avatarUrl = `/api/auth/avatar/${req.file.filename}`;
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { avatar: avatarUrl },
+      { new: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Avatar uploaded successfully',
+      data: {
+        avatarUrl,
+        user
+      }
+    });
+  })
+);
+
+// Serve avatar images
+router.get('/avatar/:filename',
+  catchAsync(async (req, res, next) => {
+    const filePath = path.join(avatarsDir, req.params.filename);
+
+    if (!fs.existsSync(filePath)) {
+      return next(new AppError('Avatar not found', 404));
+    }
+
+    res.sendFile(filePath);
   })
 );
 

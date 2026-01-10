@@ -210,6 +210,36 @@ export const authAPI = {
       method: 'POST',
     });
   },
+
+  // Upload avatar
+  uploadAvatar: async (file) => {
+    const formData = new FormData();
+    formData.append('avatar', file);
+
+    const token = cookieUtils.getCookie('authToken') ||
+      localStorage.getItem('authToken') ||
+      sessionStorage.getItem('authToken');
+
+    const response = await fetch(`${API_BASE_URL}/auth/avatar`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw {
+        status: response.status,
+        message: data.message || 'Failed to upload avatar',
+        errors: data.errors || null
+      };
+    }
+
+    return data;
+  },
 };
 
 // Samples API functions

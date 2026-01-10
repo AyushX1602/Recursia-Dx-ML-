@@ -230,7 +230,14 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
                 <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                   System
                 </h2>
-                <button className="flex items-center space-x-3 h-11 px-3 rounded-lg transition-all duration-200 group w-full hover:bg-accent text-muted-foreground hover:text-foreground">
+                <button 
+                  onClick={() => onTabChange('settings')}
+                  className={`flex items-center space-x-3 h-11 px-3 rounded-lg transition-all duration-200 group w-full ${
+                    activeTab === 'settings'
+                      ? "bg-primary/10 text-primary shadow-sm border-r-2 border-primary"
+                      : "hover:bg-accent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
                   <Settings className="h-5 w-5 shrink-0" />
                   <span className="text-sm font-medium">Settings</span>
                 </button>
@@ -248,7 +255,7 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
               className="flex items-center space-x-3 p-3 rounded-lg bg-accent/50"
             >
               <Avatar className="h-8 w-8">
-                <AvatarImage src="/placeholder-avatar.jpg" />
+                <AvatarImage src={user?.avatar ? `http://localhost:5001${user.avatar}` : undefined} />
                 <AvatarFallback className="text-xs">
                   {user?.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase() : 'U'}
                 </AvatarFallback>
@@ -306,6 +313,27 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
             ))}
           </nav>
 
+          {/* Collapsed Settings Button */}
+          <div className="pb-2 pt-2 flex justify-center">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.15 }}
+              title="Settings"
+            >
+              <button
+                onClick={() => onTabChange('settings')}
+                className={`flex items-center justify-center w-10 h-10 rounded-lg transition-all duration-200 ${
+                  isActive('settings')
+                    ? "bg-primary/10 text-primary shadow-sm"
+                    : "hover:bg-accent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Settings className="h-5 w-5 shrink-0" />
+              </button>
+            </motion.div>
+          </div>
+
           {/* Collapsed User Avatar at bottom */}
           <div className="pb-3 pt-2 border-t border-border mt-auto">
             <motion.div
@@ -315,7 +343,7 @@ export function DashboardSidebar({ activeTab, onTabChange, user, onLogout }) {
               className="flex justify-center"
             >
               <Avatar className="h-10 w-10">
-                <AvatarImage src="/placeholder-avatar.jpg" />
+                <AvatarImage src={user?.avatar ? `http://localhost:5001${user.avatar}` : undefined} />
                 <AvatarFallback className="text-xs">
                   {user?.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase() : 'U'}
                 </AvatarFallback>

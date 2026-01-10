@@ -51,6 +51,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  phone: {
+    type: String,
+    trim: true
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -109,12 +113,12 @@ const userSchema = new mongoose.Schema({
 });
 
 // Virtual for user's full display name with role
-userSchema.virtual('displayName').get(function() {
+userSchema.virtual('displayName').get(function () {
   return `${this.name} (${this.role})`;
 });
 
 // Virtual for checking if account is locked
-userSchema.virtual('isLocked').get(function() {
+userSchema.virtual('isLocked').get(function () {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
@@ -125,7 +129,7 @@ userSchema.index({ isActive: 1 });
 userSchema.index({ createdAt: -1 });
 
 // Pre-save middleware to hash password
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   // Only hash the password if it has been modified (or is new)
   if (!this.isModified('password')) return next();
 
@@ -140,12 +144,12 @@ userSchema.pre('save', async function(next) {
 });
 
 // Instance method to check password
-userSchema.methods.matchPassword = async function(enteredPassword) {
+userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Instance method to increment login attempts
-userSchema.methods.incLoginAttempts = function() {
+userSchema.methods.incLoginAttempts = function () {
   // If we have a previous lock that has expired, restart at 1
   if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({
@@ -155,7 +159,7 @@ userSchema.methods.incLoginAttempts = function() {
   }
 
   const updates = { $inc: { loginAttempts: 1 } };
-  
+
   // Lock account after 5 failed attempts for 2 hours
   if (this.loginAttempts + 1 >= 5 && !this.isLocked) {
     updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 }; // 2 hours
@@ -165,19 +169,19 @@ userSchema.methods.incLoginAttempts = function() {
 };
 
 // Instance method to reset login attempts
-userSchema.methods.resetLoginAttempts = function() {
+userSchema.methods.resetLoginAttempts = function () {
   return this.updateOne({
     $unset: { loginAttempts: 1, lockUntil: 1 }
   });
 };
 
 // Instance method to handle failed login
-userSchema.methods.handleFailedLogin = function() {
+userSchema.methods.handleFailedLogin = function () {
   return this.incLoginAttempts();
 };
 
 // Instance method to handle successful login
-userSchema.methods.handleSuccessfulLogin = function() {
+userSchema.methods.handleSuccessfulLogin = function () {
   const updates = {
     lastLogin: Date.now(),
     $unset: { loginAttempts: 1, lockUntil: 1 }
@@ -186,17 +190,17 @@ userSchema.methods.handleSuccessfulLogin = function() {
 };
 
 // Static method to find active users
-userSchema.statics.findActive = function() {
+userSchema.statics.findActive = function () {
   return this.find({ isActive: true });
 };
 
 // Static method to find by role
-userSchema.statics.findByRole = function(role) {
+userSchema.statics.findByRole = function (role) {
   return this.find({ role, isActive: true });
 };
 
 // Static method for user statistics
-userSchema.statics.getStats = async function() {
+userSchema.statics.getStats = async function () {
   return await this.aggregate([
     {
       $group: {
