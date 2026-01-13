@@ -79,8 +79,6 @@ GigaPath-AI-WSI-Breast-Cancer-Lesion-Analysis/
 .ipynb_checkpoints/
 *.ipynb
 
-# Large test folder (exclude from git)
-TEST/
-
-# Keep small test samples
+# Keep test folders
+!TEST/
 !TEST_SAMPLES/
