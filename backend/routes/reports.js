@@ -533,4 +533,309 @@ function generateAIInterpretation(sample, mlSummary) {
   return interpretations.join(' ');
 }
 
+// PDF Download endpoint
+router.get('/download-pdf/:sampleId',
+  catchAsync(async (req, res) => {
+    const { sampleId } = req.params;
+
+    console.log('📄 Generating PDF for sample:', sampleId);
+
+    const sample = await Sample.findById(sampleId);
+    if (!sample) {
+      console.log('❌ Sample not found:', sampleId);
+      return res.status(404).json({ success: false, message: 'Sample not found' });
+    }
+
+    console.log('✅ Sample found:', sample.sampleId || sampleId);
+
+    // Import Puppeteer dynamically
+    let puppeteer;
+    try {
+      puppeteer = await import('puppeteer');
+      console.log('✅ Puppeteer imported');
+    } catch (error) {
+      console.error('❌ Failed to import Puppeteer:', error.message);
+      return res.status(500).json({
+        success: false,
+        message: 'PDF generation unavailable - Puppeteer not installed',
+        error: error.message
+      });
+    }
+
+    try {
+      // Build report data
+      const patientInfo = sample.patientInfo || {};
+      const firstImage = sample.images?.[0];
+      const analysis = firstImage?.mlAnalysis || {};
+
+      const tumorProb = ((analysis.metadata?.probabilities?.tumor || 0) * 100).toFixed(1);
+      const confidence = ((analysis.confidence || 0) * 100).toFixed(1);
+      const isPositive = parseFloat(tumorProb) >= 54;
+
+      // Generate report HTML
+      const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Arial', sans-serif; 
+      padding: 40px;
+      color: #1a1a1a;
+      line-height: 1.6;
+    }
+    .header {
+      border-bottom: 4px solid #1e40af;
+      padding-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .header h1 {
+      color: #1e40af;
+      font-size: 28px;
+      margin-bottom: 10px;
+    }
+    .header .info {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 15px;
+      font-size: 12px;
+      color: #666;
+    }
+    .section {
+      margin-bottom: 25px;
+      page-break-inside: avoid;
+    }
+    .section-title {
+      background: #f3f4f6;
+      padding: 10px 15px;
+      font-size: 16px;
+      font-weight: bold;
+      color: #1e40af;
+      margin-bottom: 15px;
+      border-left: 4px solid #1e40af;
+    }
+    .field-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+    .field {
+      padding: 10px;
+      background: #f9fafb;
+      border-radius: 4px;
+    }
+    .field-label {
+      font-size: 11px;
+      color: #6b7280;
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+    .field-value {
+      font-size: 14px;
+      color: #1f2937;
+      font-weight: 500;
+    }
+    .alert {
+      padding: 15px;
+      border-radius: 6px;
+      margin: 15px 0;
+    }
+    .alert-positive {
+      background: #fef2f2;
+      border-left: 4px solid #dc2626;
+      color: #991b1b;
+    }
+    .alert-negative {
+      background: #f0fdf4;
+      border-left: 4px solid #16a34a;
+      color: #166534;
+    }
+    .alert-title {
+      font-weight: bold;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 2px solid #e5e7eb;
+      font-size: 11px;
+      color: #6b7280;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-right: 8px;
+    }
+    .badge-high { background: #fee2e2; color: #991b1b; }
+    .badge-low { background: #dcfce7; color: #166534; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>PATHOLOGY REPORT</h1>
+    <div class="info">
+      <div>
+        <strong>RecursiaDx Digital Pathology Lab</strong><br>
+        Email: lab@recursiadx.com | Phone: +91 99999 88888
+      </div>
+      <div style="text-align: right;">
+        <strong>Report ID:</strong> ${sample.sampleId || sample._id}<br>
+        <strong>Date:</strong> ${new Date().toLocaleDateString()}
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Patient Information</div>
+    <div class="field-group">
+      <div class="field">
+        <div class="field-label">Patient Name</div>
+        <div class="field-value">${patientInfo.name || 'N/A'}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Patient ID</div>
+        <div class="field-value">${patientInfo.id || 'N/A'}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Age</div>
+        <div class="field-value">${patientInfo.age || 'N/A'}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Gender</div>
+        <div class="field-value">${patientInfo.gender || 'N/A'}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Sample Information</div>
+    <div class="field-group">
+      <div class="field">
+        <div class="field-label">Sample Type</div>
+        <div class="field-value">${sample.sampleType || 'Tissue Biopsy'}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Collection Date</div>
+        <div class="field-value">${sample.sampleInfo?.collectionDate || new Date().toLocaleDateString()}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Images Analyzed</div>
+        <div class="field-value">${sample.images?.length || 0}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Analysis Status</div>
+        <div class="field-value">${sample.status || 'Completed'}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">AI Analysis Results</div>
+    <div class="alert ${isPositive ? 'alert-positive' : 'alert-negative'}">
+      <div class="alert-title">${isPositive ? '⚠️ Abnormal Findings' : '✓ Normal Findings'}</div>
+      <p>
+        ${isPositive
+          ? `AI analysis detected potential abnormalities with ${confidence}% confidence. Tumor probability: ${tumorProb}%. Risk level: ${analysis.risk_level || 'Low'}.`
+          : `AI analysis confirms normal findings with ${confidence}% confidence. No significant abnormalities detected.`
+        }
+      </p>
+    </div>
+    <div class="field-group">
+      <div class="field">
+        <div class="field-label">Detection Result</div>
+        <div class="field-value">${isPositive ? 'POSITIVE (Abnormal)' : 'NEGATIVE (Normal)'}</div>
+      </div>
+      <div class="field">
+        <div class="field-label">AI Confidence</div>
+        <div class="field-value">${confidence}%</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Tumor Probability</div>
+        <div class="field-value">${tumorProb}%</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Risk Assessment</div>
+        <div class="field-value">
+          <span class="badge ${analysis.risk_level?.includes('High') ? 'badge-high' : 'badge-low'}">
+            ${analysis.risk_level || 'Low Risk'}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Clinical Recommendations</div>
+    <ul style="padding-left: 20px; margin-top: 10px;">
+      ${isPositive ? `
+        <li style="margin-bottom: 8px;">Further histopathological examination recommended</li>
+        <li style="margin-bottom: 8px;">Consider clinical correlation with patient history</li>
+        <li style="margin-bottom: 8px;">Follow-up testing may be indicated</li>
+      ` : `
+        <li style="margin-bottom: 8px;">No immediate follow-up required based on current findings</li>
+        <li style="margin-bottom: 8px;">Continue routine screening as per clinical guidelines</li>
+        <li style="margin-bottom: 8px;">Consult with ordering physician for clinical correlation</li>
+      `}
+    </ul>
+  </div>
+
+  <div class="footer">
+    <p><strong>RecursiaDx AI-Powered Digital Pathology Platform</strong></p>
+    <p>This report was generated using AI-assisted analysis. All findings should be confirmed by a qualified pathologist.</p>
+    <p>HIPAA Compliant | Real-time AI Processing | For professional use only</p>
+  </div>
+</body>
+</html>
+      `;
+
+      // Launch Puppeteer
+      const browser = await puppeteer.launch({
+        headless: 'new',
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+
+      // Generate PDF
+      const pdf = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '20px',
+          right: '20px',
+          bottom: '20px',
+          left: '20px'
+        }
+      });
+
+      await browser.close();
+
+      // Send PDF
+      res.contentType('application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="RecursiaDx_Report_${sample.sampleId || sampleId}.pdf"`);
+      res.end(pdf, 'binary');
+
+      console.log('✅ PDF generated successfully');
+
+    } catch (error) {
+      console.error('❌ PDF generation error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to generate PDF',
+        error: error.message
+      });
+    }
+  })
+);
+
 export default router;

@@ -201,9 +201,46 @@ export function ReportGeneration({ sample, onNext }) {
   }
 
   // Download report
-  const downloadReport = (format) => {
-    toast.success(`Downloading ${format.toUpperCase()} report...`)
-    // In production, this would trigger actual download
+  const downloadReport = async (format) => {
+    if (!sample?._id) {
+      toast.error('No sample available for download')
+      return
+    }
+
+    if (format === 'pdf') {
+      try {
+        toast.info('Generating PDF report...')
+        
+        // Call backend PDF endpoint
+        const response = await fetch(`http://localhost:5001/api/reports/download-pdf/${sample._id}`)
+        
+        if (!response.ok) {
+          throw new Error('Failed to generate PDF')
+        }
+
+        // Get PDF blob
+        const blob = await response.blob()
+        
+        // Create download link
+        const url = window.URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `RecursiaDx_Report_${sample.sampleId || sample._id}.pdf`
+        document.body.appendChild(link)
+        link.click()
+        
+        // Cleanup
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(url)
+        
+        toast.success('PDF downloaded successfully!')
+      } catch (error) {
+        console.error('PDF download error:', error)
+        toast.error('Failed to download PDF')
+      }
+    } else if (format === 'docx') {
+      toast.info('DOCX download coming soon!')
+    }
   }
 
   // If no sample
