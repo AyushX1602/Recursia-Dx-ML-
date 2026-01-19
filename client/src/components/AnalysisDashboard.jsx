@@ -86,16 +86,38 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     const tumorPercentage = mlAnalyses.length > 0 ? (tumorDetections.length / mlAnalyses.length) * 100 : 0
     
     // Calculate average tumor probability from all analyses
+    // Check multiple possible locations for tumor probability
     const avgTumorProbability = mlAnalyses.reduce((sum, analysis) => {
-      // ML result is stored in metadata, probabilities are at top level
-      const tumorProb = analysis.metadata?.probabilities?.tumor || 0
-      return sum + tumorProb
+      // Try multiple possible locations for tumor probability
+      let tumorProb = 
+        analysis.metadata?.probabilities?.tumor ||  // Backend stores here
+        analysis.metadata?.probabilities?.Tumor ||  // Could be capitalized
+        analysis.probabilities?.tumor ||            // Direct on analysis
+        analysis.metadata?.is_tumor ? analysis.metadata?.confidence : 0 ||  // Use confidence if is_tumor
+        (analysis.prediction === 'malignant' || analysis.prediction === 'Tumor' ? analysis.confidence : 0) // Use confidence if tumor detected
+      
+      // Debug log to see what we're getting
+      console.log('🔍 Tumor prob extraction:', {
+        metadata_probs: analysis.metadata?.probabilities,
+        direct_probs: analysis.probabilities,
+        is_tumor: analysis.metadata?.is_tumor,
+        confidence: analysis.confidence,
+        prediction: analysis.prediction,
+        extracted: tumorProb
+      })
+      
+      return sum + (tumorProb || 0)
     }, 0) / mlAnalyses.length
 
     // Get the highest tumor probability for critical assessment
-    const maxTumorProbability = Math.max(...mlAnalyses.map(analysis => 
-      analysis.metadata?.probabilities?.tumor || 0
-    ))
+    const maxTumorProbability = Math.max(...mlAnalyses.map(analysis => {
+      return analysis.metadata?.probabilities?.tumor || 
+             analysis.metadata?.probabilities?.Tumor ||
+             analysis.probabilities?.tumor ||
+             (analysis.metadata?.is_tumor ? analysis.metadata?.confidence || analysis.confidence : 0) ||
+             (analysis.prediction === 'malignant' || analysis.prediction === 'Tumor' ? analysis.confidence : 0) ||
+             0
+    }))
 
     return {
       totalImages,
@@ -612,7 +634,16 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                 <div className="space-y-2">
                   <h4 className="font-semibold text-sm">Per-Image Tumor Probabilities</h4>
                   {realTimeData.analyses.map((analysis, index) => {
-                    const tumorProb = (analysis.metadata?.probabilities?.tumor || 0) * 100
+                    // Try multiple possible locations for tumor probability
+                    let rawProb = 
+                      analysis.metadata?.probabilities?.tumor ||
+                      analysis.metadata?.probabilities?.Tumor ||
+                      analysis.probabilities?.tumor ||
+                      (analysis.metadata?.is_tumor ? analysis.metadata?.confidence || analysis.confidence : null) ||
+                      (analysis.prediction === 'malignant' || analysis.prediction === 'Tumor' ? analysis.confidence : null) ||
+                      0
+                    // Convert to percentage if it's a decimal
+                    const tumorProb = rawProb > 1 ? rawProb : rawProb * 100
                     return (
                     <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                       <span className="text-sm font-medium">Image {index + 1}</span>
@@ -622,7 +653,7 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
                             className={`h-2 rounded-full ${
                               tumorProb > 50 ? 'bg-red-500' : 'bg-yellow-500'
                             }`}
-                            style={{ width: `${tumorProb}%` }}
+                            style={{ width: `${Math.min(tumorProb, 100)}%` }}
                           />
                         </div>
                         <span className="text-sm font-bold">

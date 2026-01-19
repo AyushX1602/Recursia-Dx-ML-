@@ -323,6 +323,7 @@ router.post('/upload-with-analysis',
       let sampleData
       if (req.body.sampleData) {
         sampleData = JSON.parse(req.body.sampleData)
+        console.log('📦 Parsed sampleData:', JSON.stringify(sampleData, null, 2));
       } else if (req.body.patientInfo) {
         // If only patientInfo is sent, create minimal sample data
         const patientInfo = JSON.parse(req.body.patientInfo)
@@ -347,6 +348,7 @@ router.post('/upload-with-analysis',
       // Extract imageType from sampleData (frontend sends it nested in patientData)
       const imageType = sampleData.imageType || req.body.imageType || 'tissue';
       console.log(`📋 Processing ${imageType} image(s)`);
+      console.log(`🔍 DEBUG: sampleData.imageType=${sampleData.imageType}, req.body.imageType=${req.body.imageType}, final imageType=${imageType}`);
 
       // Set sampleType based on imageType selection
       sampleData.sampleType = imageType === 'blood' ? 'Blood Smear' : 'Tissue Biopsy';
