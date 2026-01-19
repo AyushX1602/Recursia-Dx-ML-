@@ -48,36 +48,49 @@ RecursiaDx is a comprehensive medical image analysis platform that integrates st
 
 ### Prerequisites
 - Node.js 18+ and npm
-- Python 3.10+
+- Python 3.10+ with pip
 - MongoDB (local or Atlas)
+- **Git LFS** (required for model weights)
 - Google Gemini API key (optional, for AI reports)
 
 ### Installation
 
-1. **Clone repository**
+1. **Install Git LFS** (required for model weights)
    ```bash
-   git clone https://github.com/AyushX1602/Recursia-Dx-ML-.git
-   cd RecursiaDx
+   # Windows (with Git for Windows)
+   git lfs install
+   
+   # macOS
+   brew install git-lfs && git lfs install
+   
+   # Ubuntu/Debian
+   sudo apt install git-lfs && git lfs install
    ```
 
-2. **Backend setup**
+2. **Clone repository** (models download automatically via LFS)
+   ```bash
+   git clone https://github.com/AyushX1602/Recursia-Dx-ML-.git
+   cd Recursia-Dx-ML-
+   ```
+
+3. **Backend setup**
    ```bash
    cd backend
    npm install
    cp .env.example .env  # Configure MongoDB URI and Gemini API key
    ```
 
-3. **Frontend setup**
+4. **Frontend setup**
    ```bash
    cd client
    npm install
    ```
 
-4. **ML setup**
+5. **ML setup**
    ```bash
-   cd ml/api
+   cd ml
    pip install -r requirements.txt
-   # Download model files (see ml/README.md)
+   # Model weights are already in ml/models/weights/
    ```
 
 ### Running the Application
