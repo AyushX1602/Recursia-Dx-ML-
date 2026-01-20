@@ -38,12 +38,33 @@ export function ResultsReview({ onNext, sample }) {
     }
 
     const analysis = firstImage.mlAnalysis
+    
+    // Model's confidence IS the tumor probability
+    let tumorProb = analysis.metadata?.probabilities?.tumor || analysis.confidence || 0
+    
+    // Convert to percentage if decimal
+    if (tumorProb <= 1) tumorProb = tumorProb * 100
+    
+    // Determine if positive (>= 54% threshold)
+    const isPositive = tumorProb >= 54
+    
+    // Always calculate risk level from tumor probability
+    const riskLevel = tumorProb >= 70 ? 'High' : tumorProb >= 50 ? 'Medium' : 'Low'
+    
+    console.log('🔍 ResultsReview - ML Data:', {
+      confidence: analysis.confidence,
+      tumorProb,
+      isPositive,
+      riskLevel
+    })
+    
     return {
-      prediction: analysis.prediction || (analysis.is_tumor ? 'malignant' : 'benign'),
-      confidence: (analysis.confidence * 100).toFixed(1),
-      riskLevel: analysis.risk_level || analysis.riskAssessment || 'Unknown',
+      prediction: isPositive ? 'Malignant' : 'Benign',
+      confidence: (analysis.confidence <= 1 ? analysis.confidence * 100 : analysis.confidence).toFixed(1),
+      riskLevel,
       probabilities: analysis.metadata?.probabilities || {},
-      isPositive: analysis.is_tumor || analysis.prediction === 'malignant',
+      tumorProbability: tumorProb / 100, // Store as decimal for consistency
+      isPositive,
       detectedFeatures: analysis.detected_features || analysis.metadata?.detected_features || []
     }
   }
@@ -103,10 +124,10 @@ export function ResultsReview({ onNext, sample }) {
     )
   }
 
-  // Confidence threshold for positive/negative
+  // Use the extracted tumor probability
   const confidenceThreshold = 54
-  const tumorProb = (analysisResults.probabilities.tumor || 0) * 100
-  const isPositive = tumorProb >= confidenceThreshold
+  const tumorProb = analysisResults.tumorProbability * 100
+  const isPositive = tumorProb >= confidenceThreshold || analysisResults.isPositive
 
   return (
     <div className="grid gap-6">
@@ -169,13 +190,6 @@ export function ResultsReview({ onNext, sample }) {
               <div className="text-lg text-muted-foreground">
                 {isBloodSample ? 'Malaria Detection' : 'Cancer Detection'}
               </div>
-              <div className="mt-4">
-                {isPositive ? (
-                  <XCircle className="h-12 w-12 mx-auto text-red-500" />
-                ) : (
-                  <CheckCircle2 className="h-12 w-12 mx-auto text-green-500" />
-                )}
-              </div>
             </div>
 
             {/* Metrics */}
@@ -207,9 +221,6 @@ export function ResultsReview({ onNext, sample }) {
                 </div>
                 <div className="text-xl font-semibold">
                   {tumorProb.toFixed(1)}%
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Threshold: {confidenceThreshold}%
                 </div>
               </div>
             </div>

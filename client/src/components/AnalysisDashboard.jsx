@@ -86,37 +86,27 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
     const tumorPercentage = mlAnalyses.length > 0 ? (tumorDetections.length / mlAnalyses.length) * 100 : 0
     
     // Calculate average tumor probability from all analyses
-    // Check multiple possible locations for tumor probability
+    // Model's confidence IS the tumor probability
     const avgTumorProbability = mlAnalyses.reduce((sum, analysis) => {
-      // Try multiple possible locations for tumor probability
-      let tumorProb = 
-        analysis.metadata?.probabilities?.tumor ||  // Backend stores here
-        analysis.metadata?.probabilities?.Tumor ||  // Could be capitalized
-        analysis.probabilities?.tumor ||            // Direct on analysis
-        analysis.metadata?.is_tumor ? analysis.metadata?.confidence : 0 ||  // Use confidence if is_tumor
-        (analysis.prediction === 'malignant' || analysis.prediction === 'Tumor' ? analysis.confidence : 0) // Use confidence if tumor detected
+      // Model's confidence is the tumor probability
+      let tumorProb = analysis.metadata?.probabilities?.tumor || analysis.confidence || 0
       
-      // Debug log to see what we're getting
+      // Convert to percentage if decimal
+      if (tumorProb <= 1) tumorProb = tumorProb * 100
+      
       console.log('🔍 Tumor prob extraction:', {
-        metadata_probs: analysis.metadata?.probabilities,
-        direct_probs: analysis.probabilities,
-        is_tumor: analysis.metadata?.is_tumor,
         confidence: analysis.confidence,
-        prediction: analysis.prediction,
+        metadata_probs: analysis.metadata?.probabilities,
         extracted: tumorProb
       })
       
-      return sum + (tumorProb || 0)
+      return sum + tumorProb
     }, 0) / mlAnalyses.length
 
     // Get the highest tumor probability for critical assessment
     const maxTumorProbability = Math.max(...mlAnalyses.map(analysis => {
-      return analysis.metadata?.probabilities?.tumor || 
-             analysis.metadata?.probabilities?.Tumor ||
-             analysis.probabilities?.tumor ||
-             (analysis.metadata?.is_tumor ? analysis.metadata?.confidence || analysis.confidence : 0) ||
-             (analysis.prediction === 'malignant' || analysis.prediction === 'Tumor' ? analysis.confidence : 0) ||
-             0
+      let prob = analysis.metadata?.probabilities?.tumor || analysis.confidence || 0
+      return prob <= 1 ? prob * 100 : prob
     }))
 
     return {
@@ -125,8 +115,8 @@ export function AnalysisDashboard({ onNext, sample, analysisType = 'general' }) 
       tumorDetected: tumorDetections.length > 0,
       tumorCount: tumorDetections.length,
       tumorPercentage: tumorPercentage,
-      avgTumorProbability: avgTumorProbability * 100, // Convert to percentage
-      maxTumorProbability: maxTumorProbability * 100, // Convert to percentage
+      avgTumorProbability: avgTumorProbability, // Already in percentage
+      maxTumorProbability: maxTumorProbability, // Already in percentage
       averageConfidence: avgConfidence,
       confidenceRange: {
         min: Math.min(...mlAnalyses.map(a => a.confidence)),

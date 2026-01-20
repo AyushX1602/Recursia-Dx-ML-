@@ -101,8 +101,13 @@ router.post('/generate/:sampleId',
         averageConfidence: mlAnalysisSummary.averageConfidence,
         maxRiskScore: mlAnalysisSummary.maxRiskScore,
         detectedFeatures: mlAnalysisSummary.uniqueFeatures,
-        overallRisk: mlAnalysisSummary.maxRiskScore > 0.7 ? 'High' :
-          mlAnalysisSummary.maxRiskScore > 0.4 ? 'Moderate' : 'Low',
+        overallRisk: (() => {
+          // Calculate based on tumor probability (confidence) like other endpoints
+          const firstImg = sample.images?.[0];
+          const conf = firstImg?.mlAnalysis?.confidence || 0;
+          const tumorProb = conf <= 1 ? conf * 100 : conf;
+          return tumorProb >= 70 ? 'High' : tumorProb >= 50 ? 'Medium' : 'Low';
+        })(),
         aiInterpretation
       },
       imageAnalysis: includeImages ? sample.images.map(img => ({
@@ -353,7 +358,7 @@ router.post('/generate-summary/:sampleId',
 
       sample.images.forEach(img => {
         if (img.mlAnalysis) {
-          if (img.mlAnalysis.is_tumor || img.mlAnalysis.prediction === 'malignant') {
+          if (img.mlAnalysis.is_tumor || img.mlAnalysis.metadata?.is_tumor || img.mlAnalysis.prediction === 'malignant') {
             mlResults.malignantDetections++;
           }
           totalConfidence += img.mlAnalysis.confidence || 0;
@@ -362,8 +367,17 @@ router.post('/generate-summary/:sampleId',
             img.mlAnalysis.riskAssessment === 'medium' ? 0.5 : 0.2;
           maxRiskScore = Math.max(maxRiskScore, riskScore);
 
-          if (img.mlAnalysis.metadata?.probabilities?.tumor) {
-            mlResults.tumorProbability = img.mlAnalysis.metadata.probabilities.tumor;
+          // Extract tumor probability from multiple possible locations
+          let rawTumorProb =
+            img.mlAnalysis.metadata?.probabilities?.tumor ||
+            img.mlAnalysis.metadata?.probabilities?.Tumor ||
+            img.mlAnalysis.probabilities?.tumor ||
+            (img.mlAnalysis.metadata?.is_tumor ? img.mlAnalysis.confidence : null) ||
+            (img.mlAnalysis.prediction === 'malignant' ? img.mlAnalysis.confidence : null) ||
+            0;
+
+          if (rawTumorProb > 0) {
+            mlResults.tumorProbability = rawTumorProb;
           }
         }
       });
@@ -431,12 +445,22 @@ router.post('/generate-full/:sampleId',
       const firstImage = sample.images[0];
       if (firstImage?.mlAnalysis) {
         const analysis = firstImage.mlAnalysis;
-        const tumorProb = (analysis.metadata?.probabilities?.tumor || 0) * 100;
 
-        mlResults.tumorProbability = tumorProb;
-        mlResults.confidence = (analysis.confidence || 0) * 100;
-        mlResults.isPositive = tumorProb >= 54;
-        mlResults.riskLevel = analysis.risk_level || analysis.riskAssessment || 'Low';
+        // Model's confidence IS the tumor probability
+        const rawConfidence = analysis.confidence || 0;
+        const confidencePercent = rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence;
+
+        // If explicit probabilities exist, prefer them
+        let tumorProbPercent = confidencePercent;
+        if (analysis.metadata?.probabilities?.tumor !== undefined) {
+          const prob = analysis.metadata.probabilities.tumor;
+          tumorProbPercent = prob <= 1 ? prob * 100 : prob;
+        }
+
+        mlResults.tumorProbability = tumorProbPercent;
+        mlResults.confidence = confidencePercent;
+        mlResults.isPositive = tumorProbPercent >= 54;
+        mlResults.riskLevel = tumorProbPercent >= 70 ? 'High' : tumorProbPercent >= 50 ? 'Medium' : 'Low';
       }
     }
 
@@ -568,9 +592,31 @@ router.get('/download-pdf/:sampleId',
       const firstImage = sample.images?.[0];
       const analysis = firstImage?.mlAnalysis || {};
 
-      const tumorProb = ((analysis.metadata?.probabilities?.tumor || 0) * 100).toFixed(1);
-      const confidence = ((analysis.confidence || 0) * 100).toFixed(1);
+      // The model's confidence IS the tumor probability (user confirmed)
+      const rawConfidence = analysis.confidence || 0;
+      const confidencePercent = rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence;
+
+      // Tumor probability = model confidence (this is what the model outputs)
+      let tumorProbPercent = confidencePercent;
+
+      // If explicit probabilities exist, prefer them
+      if (analysis.metadata?.probabilities?.tumor !== undefined) {
+        tumorProbPercent = analysis.metadata.probabilities.tumor <= 1
+          ? analysis.metadata.probabilities.tumor * 100
+          : analysis.metadata.probabilities.tumor;
+      }
+
+      const tumorProb = tumorProbPercent.toFixed(1);
+      const confidence = confidencePercent.toFixed(1);
+
+      // Determine if positive (tumor detected) - threshold 54%
       const isPositive = parseFloat(tumorProb) >= 54;
+
+      // Get risk level from analysis or derive from tumor probability
+      const riskLevel = analysis.risk_level || analysis.riskAssessment || analysis.metadata?.risk_level ||
+        (parseFloat(tumorProb) >= 70 ? 'High' : parseFloat(tumorProb) >= 50 ? 'Medium' : 'Low');
+
+      console.log('📊 PDF Data:', { tumorProb, confidence, isPositive, riskLevel, rawAnalysis: analysis });
 
       // Generate report HTML
       const html = `
@@ -744,7 +790,7 @@ router.get('/download-pdf/:sampleId',
       <div class="alert-title">${isPositive ? '⚠️ Abnormal Findings' : '✓ Normal Findings'}</div>
       <p>
         ${isPositive
-          ? `AI analysis detected potential abnormalities with ${confidence}% confidence. Tumor probability: ${tumorProb}%. Risk level: ${analysis.risk_level || 'Low'}.`
+          ? `AI analysis detected potential abnormalities with ${confidence}% confidence. Tumor probability: ${tumorProb}%. Risk level: ${riskLevel}.`
           : `AI analysis confirms normal findings with ${confidence}% confidence. No significant abnormalities detected.`
         }
       </p>
@@ -765,8 +811,8 @@ router.get('/download-pdf/:sampleId',
       <div class="field">
         <div class="field-label">Risk Assessment</div>
         <div class="field-value">
-          <span class="badge ${analysis.risk_level?.includes('High') ? 'badge-high' : 'badge-low'}">
-            ${analysis.risk_level || 'Low Risk'}
+          <span class="badge ${riskLevel?.includes('High') ? 'badge-high' : 'badge-low'}">
+            ${riskLevel}
           </span>
         </div>
       </div>

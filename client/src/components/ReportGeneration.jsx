@@ -68,15 +68,32 @@ export function ReportGeneration({ sample, onNext }) {
     if (!firstImage?.mlAnalysis) return null
 
     const analysis = firstImage.mlAnalysis
-    const tumorProb = (analysis.metadata?.probabilities?.tumor || 0) * 100
+    
+    // Model's confidence IS the tumor probability
+    let tumorProb = analysis.metadata?.probabilities?.tumor || analysis.confidence || 0
+    
+    // Convert to percentage if decimal
+    if (tumorProb <= 1) tumorProb = tumorProb * 100
+    
+    // Determine if positive (>= 54% threshold)
     const isPositive = tumorProb >= 54
+    
+    // Always calculate risk level from tumor probability (ignore stored value which might be stale)
+    const riskLevel = tumorProb >= 70 ? 'High' : tumorProb >= 50 ? 'Medium' : 'Low'
+    
+    console.log('🔍 ReportGeneration - ML Data:', {
+      confidence: analysis.confidence,
+      tumorProb,
+      isPositive,
+      riskLevel
+    })
 
     return {
       prediction: isPositive ? 'Malignant' : 'Benign',
-      confidence: (analysis.confidence * 100).toFixed(1),
-      riskLevel: analysis.risk_level || 'Low Risk',
+      confidence: tumorProb.toFixed(1),
+      riskLevel,
       tumorProbability: tumorProb.toFixed(1),
-      normalProbability: ((analysis.metadata?.probabilities?.normal || 0) * 100).toFixed(1),
+      normalProbability: (100 - tumorProb).toFixed(1),
       isPositive,
       totalImages: sample.images.length,
       analyzedImages: sample.images.filter(img => img.mlAnalysis).length
